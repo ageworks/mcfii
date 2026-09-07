@@ -52,19 +52,29 @@
     border:2px solid #70d89b;background:linear-gradient(#146a3d,#0a3f26);color:#fff;padding:7px 14px;border-radius:10px;
     font:800 12px/1 system-ui,sans-serif;letter-spacing:1px;box-shadow:0 3px 0 #041b10}
   #netLaunch.on{transform:translateY(2px);box-shadow:0 1px 0 #041b10}
-  #netModal{position:fixed;z-index:100;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;
-    padding:18px;touch-action:auto;user-select:text;-webkit-user-select:text}
+  #netModal{position:fixed;z-index:100;inset:0;background:rgba(0,0,0,.88);display:none;align-items:flex-start;justify-content:center;
+    padding:max(6px,env(safe-area-inset-top)) 6px max(6px,env(safe-area-inset-bottom));overflow:hidden;touch-action:auto;user-select:text;-webkit-user-select:text}
   #netModal.show{display:flex}
-  #netCard{width:min(92vw,430px);max-height:92vh;overflow:auto;background:#111522;border:2px solid #4a566f;border-radius:16px;
-    padding:18px;color:#f4f4f8;font:14px/1.5 system-ui,sans-serif;text-align:center;touch-action:auto}
-  #netCard h2{font-size:20px;margin:0 0 8px;color:#f0c020}
-  #netCard p{margin:7px 0;color:#c9cfdd}
-  #netCard .netBtns{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:12px 0}
-  #netCard button{min-height:44px;border:0;border-radius:10px;padding:10px 14px;font-weight:800;font-size:14px;background:#166a3f;color:white}
+  #netCard{width:min(96vw,430px);max-height:calc(100dvh - max(12px,env(safe-area-inset-top)) - max(12px,env(safe-area-inset-bottom)));overflow:auto;
+    background:#111522;border:2px solid #4a566f;border-radius:14px;padding:12px;color:#f4f4f8;font:13px/1.35 system-ui,sans-serif;
+    text-align:center;touch-action:auto;-webkit-overflow-scrolling:touch}
+  #netCard h2{font-size:18px;margin:0 0 4px;color:#f0c020}
+  #netCard p{margin:5px 0;color:#c9cfdd}
+  #netCard .netBtns{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:7px 0}
+  #netCard button{min-height:38px;border:0;border-radius:9px;padding:8px 11px;font-weight:800;font-size:13px;background:#166a3f;color:white}
   #netCard button.sub{background:#343b52;color:#eef1ff}
   #netCard button.danger{background:#7b2b2b}
-  #netQr{background:white;display:inline-block;padding:8px;border-radius:8px;max-width:100%;margin:8px auto}
-  #netQr canvas{width:min(72vw,300px)!important;height:auto!important;max-height:none;background:#fff}
+  #netQr{background:white;display:inline-block;padding:5px;border-radius:7px;max-width:100%;margin:4px auto}
+  #netQr canvas,#netQr img{display:block;width:min(64vw,38dvh,240px)!important;height:auto!important;max-width:240px!important;max-height:240px!important;background:#fff}
+  @media (max-height:700px){
+    #netCard{padding:9px;font-size:12px;line-height:1.25}
+    #netCard h2{font-size:16px;margin-bottom:2px}
+    #netCard p{margin:3px 0}
+    #netCard .netBtns{margin:5px 0}
+    #netCard button{min-height:34px;padding:6px 9px;font-size:12px}
+    #netQr{padding:4px;margin:3px auto}
+    #netQr canvas,#netQr img{width:min(58vw,34dvh,210px)!important;max-width:210px!important;max-height:210px!important}
+  }
   #netStatus{min-height:42px;color:#9ad8ff!important;font-weight:700}
   #netPaste{width:100%;min-height:72px;background:#080b12;color:#fff;border:1px solid #4a566f;border-radius:8px;padding:8px;
     font:11px/1.35 monospace;user-select:text;-webkit-user-select:text;touch-action:auto}
@@ -404,7 +414,11 @@ async function netQrShow(text){
     return false;
   }
   try{
-    new QRCode(netQr,{text:text,width:280,height:280,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.L});
+    const vh=Math.max(320,window.innerHeight||document.documentElement.clientHeight||640);
+    const vw=Math.max(320,window.innerWidth||document.documentElement.clientWidth||375);
+    const shortScreen=vh<=700;
+    const qrSize=Math.max(176,Math.min(shortScreen?210:240,Math.floor(vw*(shortScreen?0.58:0.64)),Math.floor(vh*(shortScreen?0.34:0.38))));
+    new QRCode(netQr,{text:text,width:qrSize,height:qrSize,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.L});
     netPaste.value=text;
     return true;
   }catch(e){
