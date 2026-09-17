@@ -286,6 +286,7 @@ const PF_PAL={
   fire  :[[30,0,0,255],[176,16,16,255],[255,90,0,255],[255,176,32,255],[255,240,160,255],[0,0,0,150]],
   pink  :[[30,0,18,255],[176,32,106,255],[255,90,168,255],[255,160,208,255],[255,240,248,255],[0,0,0,150]],
   cyan  :[[0,14,24,255],[26,112,160,255],[48,184,232,255],[144,232,255,255],[240,255,255,255],[0,0,0,150]],
+  lock  :[[6,6,10,255],[44,44,52,255],[62,62,72,255],[78,78,88,255],[92,92,102,255],[0,0,0,120]],
   silver:[[12,12,24,255],[106,106,144,255],[180,180,208,255],[232,232,248,255],[255,255,255,255],[0,0,0,150]],
   dim   :[[8,8,16,255],[80,80,112,255],[128,128,168,255],[168,168,204,255],[200,200,230,255],[0,0,0,130]]};
 function pfRamp(hex){                        // 任意の基本色から6階調を作る
@@ -390,7 +391,7 @@ function togglePause(){
     if(g.dbgN>=4){g.dbgN=0;dbgShow()}
     return;
   }
-  if(g.phase==='select'||g.phase==='over'||g.phase==='move'||g.phase==='continue'||g.phase==='dmout'||g.phase==='wave'||g.phase==='twdoor')return;
+  if(g.phase==='select'||g.phase==='over'||g.phase==='move'||g.phase==='continue'||g.phase==='dmout'||g.phase==='wave'||g.phase==='twdoor'||g.phase==='unlock')return;
   g.paused=!g.paused;}
 function releaseBtn(k){held[k]=false}
 const stick=document.getElementById('stick'),knob=document.getElementById('knob');
@@ -433,7 +434,9 @@ function sync(){let x=0,y=0;
   if(sid===null){pad.x=x;pad.y=y}}
 cv.addEventListener('pointerdown',e=>{
   if(g.phase==='title'){const r=cv.getBoundingClientRect(),tx=(e.clientX-r.left)/r.width*W,ty=(e.clientY-r.top)/r.height*H;
-    if(ty>196&&ty<256)g.tsel=tx<200?0:1}      // タイトルのSTORY/TOWERをタップで選ぶ
+    if(ty>196&&ty<256){
+      if(tx>=200&&!towerUnlocked){e.preventDefault();return}   // 未解放のTOWERをタップしても何も起きない
+      g.tsel=tx<200?0:1}}      // タイトルのSTORY/TOWERをタップで選ぶ
   pressBtn('A');setTimeout(()=>releaseBtn('A'),90);e.preventDefault()});
 (function(){
   const bp=document.getElementById('bPause');
@@ -753,6 +756,14 @@ function isBoss(){return g.stage===BOSS_STAGE&&!NET.connected}
 function isBoss2(){return g.stage===BOSS2_STAGE&&!NET.connected}
 function isAnyBoss(){return isBoss()||isBoss2()}
 function isTower(){return g.mode==='tower'&&!NET.connected}
+// TOWERの解放: 8面(GOD X)を倒すと解放。端末に記録(保存できない環境ではその間だけ有効)
+const TOWER_KEY='mcf2_tower_unlocked';
+let towerUnlocked=false;
+try{towerUnlocked=localStorage.getItem(TOWER_KEY)==='1'}catch(e){}
+function unlockTower(){                     // 初めて解放したときだけ true
+  if(towerUnlocked)return false;
+  towerUnlocked=true;try{localStorage.setItem(TOWER_KEY,'1')}catch(e){}
+  return true}
 function isElev(){return isBoss2()||isTower()}     // エレベーターのステージで戦う(中ボス2 / TOWER)
 // 中ボス2: 敵の攻撃力を中ボス1のOFC並みに抑える(通常パンチ7→5相当)。OFCは元々その値なので対象外
 const BOSS2_ATK=5/7;
@@ -1428,7 +1439,8 @@ function step(){
   if(NET.connected&&NET.role==='guest'){netInputPacket();clearEdge();return}
   if(g.paused){clearEdge();return}
   if(g.phase==='title'){g.pt++;
-    if(pad.x!==0&&g.tselCd!==pad.x){const ns=pad.x>0?1:0;if(ns!==g.tsel)sfx('cur',0.9);g.tsel=ns;g.tselCd=pad.x}
+    if(!towerUnlocked)g.tsel=0;               // 未解放のTOWERは選べない
+    if(pad.x!==0&&g.tselCd!==pad.x){const ns=(pad.x>0&&towerUnlocked)?1:0;if(ns!==g.tsel)sfx('cur',0.9);g.tsel=ns;g.tselCd=pad.x}
     if(pad.x===0)g.tselCd=0;
     if(edge.A&&ready){g.mode=g.tsel===1?'tower':'story';g.phase='select';g.pt=0;g.sel=0;
       sfx('ok',1);bgmWant=true;bgmPlay(0);clearEdge();return}
@@ -1486,7 +1498,14 @@ function step(){
     }
     if(g.pt>60&&edge.A){
       if(g.cleared&&g.stage<g.maxStage&&!isTower()){g.phase='move';g.pt=0;bgmWant=false;bgmStop();sfx('st',1);clearEdge();return}
+      if(g.cleared&&g.stage>=g.maxStage&&!isTower()&&!NET.connected&&unlockTower()){   // 8面クリア: TOWER解放
+        g.phase='unlock';g.pt=0;bgmWant=false;bgmStop();clearEdge();return}
       g.phase='title';g.pt=0;bgmWant=false;bgmStop()}
+    clearEdge();return}
+  if(g.phase==='unlock'){g.pt++;           // 【TOWER】UNLOCKED!! の告知
+    if(g.pt===24)sfx('o',1);
+    if(g.pt===40)sfx('win',1);
+    if(g.pt>100&&edge.A){g.phase='title';g.pt=0;g.tsel=1;sfx('ok',1)}   // タイトルに戻るとTOWERを選んだ状態
     clearEdge();return}
   if(g.phase==='wave'){g.pt++;             // 扉が開き、次のセットが入場してくる
     g.doorT=g.pt;
@@ -2057,8 +2076,8 @@ function drawTitle(){
   px(bx-20,by-6,bw+40,bh+10,'#000');
   const opts=['STORY','TOWER'],xs=[136,264],ty=221;
   for(let i=0;i<2;i++){
-    const on=g.tsel===i;
-    pfOr('tt',opts[i],xs[i],ty,on?'gold':'dim','center',on?'#f0c020':'#6a6a88',2);
+    const on=g.tsel===i,locked=(i===1&&!towerUnlocked);
+    pfOr('tt',opts[i],xs[i],ty,on?'gold':(locked?'lock':'dim'),'center',on?'#f0c020':(locked?'#3a3a44':'#6a6a88'),2);
     if(on){                                   // 選択中は左右に矢印
       const w=pfW('tt',opts[i]),o=((g.pt>>3)%2);
       const lx=xs[i]-w/2-12-o,rx=xs[i]+w/2+8+o;
@@ -2119,6 +2138,36 @@ function drawCombo(f,right){
   pfText('ch','HIT',x+nw+gap,y+pfH('cn')-pfH('ch'),pal,'left');   // HITは数字の下端にそろえる
 }
 /* ---- TALENT PALETTE ---- */
+/* ---- 【TOWER】UNLOCKED!! ---- */
+function pfBracket(x,y,h,left,pal){          // ドット絵の隅付き括弧【】(上下が太く、内側がえぐれた形)
+  const P=PF_PAL[pal],c=i=>'rgb('+P[i][0]+','+P[i][1]+','+P[i][2]+')';
+  const stem=7,arm=10,K=Math.round(h*0.32);
+  const wAt=r=>{const d=Math.min(r,h-1-r);return stem+Math.round(arm*Math.max(0,(K-d)/K))};
+  const rowRect=(r,e)=>{const w=wAt(r);return left?[x-e,y+r,w+e*2]:[x-w-e,y+r,w+e*2]};
+  for(let r=0;r<h;r++){const q=rowRect(r,2);px(q[0]+2,q[1]+2,q[2],1,'rgba(0,0,0,.55)')}   // 影
+  for(let r=-2;r<h+2;r++){const rr=Math.max(0,Math.min(h-1,r)),q=rowRect(rr,2);px(q[0],y+r,q[2],1,c(0))}  // 縁
+  for(let r=0;r<h;r++){const q=rowRect(r,0),t=r/(h-1);
+    px(q[0],q[1],q[2],1,r===0?c(4):(t<0.34?c(3):(t<0.66?c(2):c(1))))}
+}
+function drawUnlock(){
+  const pt=g.pt;
+  px(0,0,W,H,'#000');
+  // 放射状の光の筋
+  if(pt>=24){ctx.save();ctx.globalAlpha=Math.min(0.35,(pt-24)/60);ctx.translate(200,118);ctx.rotate(pt*0.004);
+    for(let i=0;i<12;i++){ctx.rotate(Math.PI/6);ctx.fillStyle=i%2?'#f0a020':'#6a3a00';ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-24,-260);ctx.lineTo(24,-260);ctx.fill()}
+    ctx.restore()}
+  if(pt>=24&&pt<30)px(0,0,W,H,'rgba(255,255,255,'+(1-(pt-24)/6)+')');   // 解放の瞬間に白く光る
+  // 【TOWER】 上から落ちてくる
+  const dy=pt<24?Math.round(-(24-pt)*6):([4,2,1][pt-24]||0);
+  const tw=pfW('bg','TOWER'),bh=40,ty=84+dy;
+  if(pt>4){
+    pfBracket(200-tw/2-26,ty-5,bh,true,'gold');pfBracket(200+tw/2+26,ty-5,bh,false,'gold');
+    pfOr('bg','TOWER',200,ty,'gold','center','#f0c020',4)}
+  // UNLOCKED!! 右からスライド
+  if(pt>=40){const sx=Math.max(0,(52-pt)*24),pal=(pt>>3)%2?'fire':'gold';
+    pfOr('bg','UNLOCKED!!',200+sx,140,pal,'center','#ffd84a',4)}
+  if(pt>100&&(pt>>4)%2)pfOr('md','PUSH A TO CONTINUE',200,236,'silver','center','#ffffff',1);
+}
 function drawTalent(){
   const tp=g.tp,pt=g.pt;
   px(0,0,W,H,'rgba(6,4,16,0.88)');
@@ -2220,6 +2269,7 @@ function render(){
     if((g.pt>>4)%2)txt('PUSH  A  TO CONTINUE',200,206,'#9ad8ff',1,'center');
     txt('STAGE '+g.stage+'   VS  '+p2.name,200,226,'#a0a0c0',1,'center');
     txt('CONTINUE '+(g.continues+1)+' / 3',200,244,'#6a6a88',1,'center')}
+  else if(g.phase==='unlock')drawUnlock();
   else if(tpShown())drawTalent();
   else if(g.phase==='over'){
     px(0,0,W,H,'rgba(6,4,16,0.72)');
