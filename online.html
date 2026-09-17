@@ -1196,6 +1196,25 @@ function startMove(f,key){
   }}
 // 方向入力を数フレーム分バッファし、Xボタンとの同時押しの精度要求を緩和する
 const INPBUF_LEN=10;
+/* ---- バックステップ: 後ろを2回連続で押すと、低く素早く後ろへ跳ぶ(途中で攻撃不可) ---- */
+const BS_TAP=10,BS_GAP=12,BS_VX=5.6,BS_VY=-5.2;   // 1回目の押し時間上限 / 2回目までの猶予 / 横速度 / 跳ね上がり
+function backstepInput(f,inp){
+  if(f.cpu)return false;                     // CPUの動きは今まで通り
+  const back=(inp.x===-f.face&&inp.y===0);
+  let fire=false;
+  if(back){
+    if(!f.bsHeld){fire=f.bsGap>0;f.bsHoldT=0}
+    f.bsHoldT=(f.bsHoldT||0)+1;
+  }else if(f.bsHeld){
+    f.bsGap=(f.bsHoldT<=BS_TAP)?BS_GAP:0;   // 短く押して離したら2回目を待つ
+  }
+  if(!back&&f.bsGap>0)f.bsGap--;
+  f.bsHeld=back;
+  if(fire){f.bsGap=0;f.bsHoldT=0}
+  return fire}
+function startBackstep(f){
+  f.state='bstep';f.st=0;f.onG=false;f.vy=BS_VY;f.vx=-f.face*BS_VX;
+  f.jd=-1;f.airAtk=true;sfx('w',0.35)}
 function pushBuf(f,inp){
   if(!f.inpBuf)f.inpBuf=[];
   f.inpBuf.push({x:inp.x,y:inp.y});
@@ -1251,12 +1270,15 @@ function act(f,inp,btn){
     return}
 
   if(f.state==='land'&&f.st<5)return;
+  if(f.state==='bstep'){if(f.onG)f.state='land';return}   // バックステップ中は攻撃できない
   if(!f.onG){
     if((btn.A||btn.B)&&!f.airAtk){f.airAtk=true;startMove(f,btn.A?'apunch':'akick')}
     else f.state='jump';
     return}
 
   // 地上
+  const bs=backstepInput(f,inp);             // ←←(後ろ2回)の判定
+  if(f.cpu&&btn.BS){startBackstep(f);return} // CPUの緊急回避
   if(btn.X){
     // 必殺技1=→X(突進) / 必殺技2=←X(対空) / 必殺技3=↓X(飛び道具)
     // 直近10フレーム以内の方向入力も有効とし、同時押しのタイミング/方向をシビアにしない
@@ -1270,6 +1292,7 @@ function act(f,inp,btn){
     if(inp.y>0)startMove(f,btn.A?'cpunch':'ckick');
     else startMove(f,btn.A?'punch':'kick');
     return}
+  if(bs){startBackstep(f);return}
   if(inp.y<0){f.vy=-13.2;f.jd=inp.x===0?0:(inp.x===f.face?1:-1);
     f.vx=inp.x*4.3;f.onG=false;f.airAtk=false;f.state='jump';f.st=0;return}
   if(inp.y>0){f.state='crouch';f.vx=0;return}
@@ -1363,6 +1386,18 @@ function ai(f,o){
     if((f.blockstun>0||f.hitstun>0)&&!a.wasStun)a.press=(a.press||0)+1;
     a.wasStun=(f.blockstun>0||f.hitstun>0);
     if(a.press>0&&!a.wasStun)a.press=Math.max(0,a.press-1/70);
+  }
+  // --- 緊急回避: 目の前で攻撃を出されたら、たまにバックステップで逃げる ---
+  if(a.bsCd>0)a.bsCd--;
+  if(o.act&&a.bsAct!==o.act){
+    a.bsAct=o.act;                           // 相手の技1回につき1度だけ判断
+    const od=o.act.d,k=o.act.k;
+    const threat=o.onG&&od.hits&&od.hits.length&&!od.air&&k!=='thr'&&
+      ((d<90&&o.act.t<=3)||(k==='s3'&&d<160));        // 近距離の地上攻撃の出始め / 突進技
+    const room=(f.face>0?f.x-xmin():xmax()-f.x)>60;     // 背後に下がる余地がある
+    const free=f.onG&&!f.act&&f.hitstun<=0&&f.blockstun<=0&&f.state!=='land'&&f.state!=='bstep';
+    if(threat&&room&&free&&(a.bsCd||0)<=0&&Math.random()<Math.min(0.30,0.06+L.rea*1.8)){
+      a.bsCd=120;a.m='wait';a.t=18;btn.BS=true;return{inp:inp,btn:btn}}
   }
   // --- 同じ技を連発されたら割り込む(ハメ対策) ---
   if(o.act&&o.act.t===0){
@@ -1803,6 +1838,7 @@ function poseKey(f){
     case 'walk':{const n=P.walk.length;return P.walk[Math.floor(f.anim/9)%n]}
     case 'walkb':{const n=P.walk.length;return P.walk[(n-1)-Math.floor(f.anim/9)%n]}
     case 'land':return P.jump[String(f.jd)][3];
+    case 'bstep':{const j=P.jump['-1'];return f.vy<0?j[0]:j[2]}
     case 'jump':{
       const j=P.jump[String(f.jd)];
       if(f.vy<-3.5)return j[0];
