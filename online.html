@@ -1508,7 +1508,7 @@ function step(){
     g.doorT=g.pt;
     if(g.pt===45)g.floorShow=g.floor;         // 階数表示が切り替わる
     if(g.floor>1&&g.pt<=90&&p1.hp>0&&p1.hp<100){p1.hp=Math.min(100,p1.hp+30/90);p1.hpG=Math.max(p1.hpG,p1.hp)}  // 移動中に30回復
-    if(g.pt===110){reset(p2,xmax()-6,-1);p2.hp=p2.hpG=100}
+    if(g.pt===110){reset(p2,TW_DOOR_IN,-1);p2.hp=p2.hpG=100}   // 扉の奥(手前の柱に隠れた位置)に配置
     if(g.pt>110){const tx=xmax()-30;
       if(p2.x>tx){p2.x-=1.6;p2.state='walk';p2.anim++}else p2.state='idle';p2.face=-1}
     if(g.pt>=190){g.phase='ready';g.pt=0;g.doorT=0;g.tick=0;g.time=60;g.msg='';p2.state='idle'}
@@ -1670,6 +1670,7 @@ const TW_ENEMY=[
   ['tk'  ,'tk'  ,0,1.00,{anti:1.9,fire:2.0}],       // T.K.: 対空・飛び技多め
   ['gy'  ,'gx'  ,1,0.75,{noArmor:1,noFire:1}],      // GOD Y: 突進アーマー無し・飛び技無し
   ['gx'  ,'gx'  ,0,0.75,{noArmor:1}]];              // GOD X: 突進アーマー無し
+const TW_DOOR_IN=346,TW_DOOR_CLIP=310;     // 入場開始位置 / 扉の手前の柱(これより右の敵は描かない)
 function towerTier(fl){return fl<=7?0:(fl<=14?1:(fl<=21?2:3))}   // 7階ごとに強さが上がる(22階以降は最強で固定)
 function towerPick(){                       // 重み付きで抽選。直前と同じ敵は出さない
   const list=TW_ENEMY.filter(e=>e[0]!==g.twLast);
@@ -1702,7 +1703,7 @@ function towerRoundOver(){
     if(p2.hp<=0&&g.time>0&&/^s[123]$/.test(p1.finKey||''))g.tw.fin++;   // 必殺技でFinish
     if(p2.ch==='gx')g.tw.god++;                                          // GOD X / GOD Y 討伐
     if(g.perf)g.tw.perf++;
-    p1.state='win';p1.st=0;p1.winT=0;p1.act=null;p1.vx=0;
+    if(g.floor>=TOWER_TOP){p1.state='win';p1.st=0;p1.winT=0;p1.act=null;p1.vx=0}   // 途中の階では勝利モーションを挟まない
     sfx('win',1);g.msg='YOU WIN';
   }else{
     p1.wins=0;
@@ -2179,7 +2180,12 @@ function render(){
   drawStage();
   const alive=mobs.length?[p2].concat(mobs).filter(f=>f.alive!==false):[p2];
   const ord=[p1].concat(alive).sort((a,b)=>a.y-b.y);   // 奥のキャラから描く
-  drawDM();drawProjs();ord.forEach(drawFighter);drawSparks();
+  drawDM();drawProjs();
+  ord.forEach(function(f){
+    if(f===p2&&g.phase==='twdoor'){           // TOWER入場中: 扉の枠より右は隠し、扉から出てくるように見せる
+      ctx.save();ctx.beginPath();ctx.rect(-20,0,TW_DOOR_CLIP+20,H);ctx.clip();drawFighter(f);ctx.restore()}
+    else drawFighter(f)});
+  drawSparks();
   if(g.flash>0)px(0,0,W,H,'rgba(255,255,255,0.45)');
   drawHud();
   if(g.phase==='fight'||g.phase==='ko'){drawCombo(p1,false);drawCombo(p2,true)}
