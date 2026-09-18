@@ -532,7 +532,12 @@ cv.addEventListener('pointerdown',e=>{
 const CH={
  bl:{id:'bl',name:'BRUTS LEE',portrait:'SH0',bodyScale:1.02,
    moves:[['MOUSE TORNADO','>X'],['KEYBOARD MANIA','<X'],['ASANA PHOENIX','vX']],proj:['S17'],projY:-72,projBox:[34,-22,22],
-   mvOv:{punch:{total:15}},                 // パンチの連打速度を他キャラより少し速く(硬直を短縮)
+   mvOv:{punch:{total:15},                 // パンチの連打速度を他キャラより少し速く(硬直を短縮)
+     // MOUSE TORNADO: 3段/吹っ飛ばない/あたり判定は従来のまま/1〜2段目は飛び道具をすり抜ける/前進は中・押し戻されにくい
+     s3:{dash:{s:4,e:30,vx:3.7},pushR:0.15,projDodge:{s:4,e:22},total:38,
+       hits:[{s:6, e:12,box:[-24,-116,104,116],dmg:7,kb:2.6},
+             {s:14,e:20,box:[-24,-116,104,116],dmg:6,kb:2.6},
+             {s:22,e:30,box:[-24,-116,104,116],dmg:7,kb:2.6}]}},
    pose:{idle:'T0',crouch:'C0',guard:'G0',hit:'F2',downAir:'D0',downLie:'D1',getup:'C0',
      walk:['W0','W1'],dizzy:['F0','F1','F2','F3','F4'],win:['V0','V1','V2','V3','V4','V5'],
      jump:{'0':['J2','J3','J4','J5'],'1':['JF2','JF3','JF5','JF6'],'-1':['JB2','JB3','JB4','JB5']}},
@@ -552,6 +557,11 @@ const CH={
      win:['xV0','xV1','xV2','xV3','xV4','xV5','xV6','xV7','xV8'],
      jump:{'0':['xJ2','xJ3','xJ4','xJ5'],'1':['xJF2','xJF4','xJF6','xJF7'],'-1':['xJ2','xJ3','xJ4','xJ5']}},
    akey:{apunch:{'0':'xJP4','1':'xJFP4','-1':'xJBP4'},akick:{'0':'xJK3','1':'xJFK4','-1':'xJBK4'}},
+   // BOTTLE MUSOU: 3段/3段目がガードされなければ吹っ飛ぶ/あたり判定は従来のまま/技後の硬直が大きい/前進が大きく押し戻しも受ける
+   mvOv:{s3:{dash:{s:4,e:33,vx:5.2},total:44,
+     hits:[{s:6, e:12,box:[-24,-116,104,116],dmg:8,kb:2.6},
+           {s:14,e:20,box:[-24,-116,104,116],dmg:6,kb:2.6},
+           {s:22,e:30,box:[-24,-116,104,116],dmg:8,kb:7.4}]}},
    fr:{punch:[['xP1',3],['xP2',9],['xP3',6]],
        kick:[['xK2',4],['xK3',11],['xK4',7]],
        cpunch:[['xCP1',3],['xCP2',6],['xCP3',6]],
@@ -573,11 +583,12 @@ const CH={
    mvOv:{punch:{hits:[{s:3,e:11,box:[18,-102,28,26],dmg:7,kb:3.4}]},    // 小柄なぶんリーチを短く
      apunch:{air:1,fr:[['mJP4',16]],hits:[{s:2,e:12,box:[14,-96,28,32],dmg:8,kb:3.2}]},
      cpunch:{hits:[{s:3,e:8,box:[18,-62,28,24],dmg:6,kb:2.6}]},
-     s3:{dash:null,                          // 突進せずその場で連打
-     hits:[{s:6, e:11,box:[16,-104,44,30],dmg:6,kb:1.6},
-           {s:13,e:18,box:[16,-104,44,30],dmg:5,kb:1.6},
-           {s:20,e:25,box:[16,-104,44,30],dmg:5,kb:1.6},
-           {s:27,e:33,box:[16,-104,48,30],dmg:7,kb:5.0}]}},
+     // DONALD RUSH: 4段/吹っ飛ばない/あたり判定は従来のまま/技後の硬直は小/ほとんど前に進まず押し戻されにくい
+     s3:{dash:{s:4,e:33,vx:0.7},pushR:0.15,total:38,
+     hits:[{s:6, e:11,box:[16,-104,44,30],dmg:5,kb:1.6},
+           {s:13,e:18,box:[16,-104,44,30],dmg:4,kb:1.6},
+           {s:20,e:25,box:[16,-104,44,30],dmg:4,kb:1.6},
+           {s:27,e:33,box:[16,-104,48,30],dmg:7,kb:2.0}]}},
    fr:{punch:[['mP1',3],['mP2',9],['mP3',6]],
        kick:[['mK2',4],['mK3',11],['mK4',7]],
        cpunch:[['mCP1',3],['mCP2',6],['mCP3',6]],
@@ -707,6 +718,12 @@ function spCost(f,k){const c=CH[f.ch]&&CH[f.ch].cost;return (c&&c[k]!==undefined
 // AIの強さ表を引く。8面第2段階のGOD Xだけ1段上のLVを使う
 function lvOf(f){let i=(f.lvl!==undefined?f.lvl:1);if(i===9&&g.gx2)i=10;return LV[i]}
 // アーマー付き突進(GOD TACKLE)の実行中か
+// 突進技の一部で「飛び道具をすり抜ける」区間
+function projDodging(f){const a=f&&f.act,d=a&&a.d&&a.d.projDodge;return !!(d&&a.t>=d.s&&a.t<d.e)}
+// 突進中の押し戻されにくさ(0=押し負けない 0.5=通常)。未設定なら通常
+function dashPushR(f){const a=f&&f.act,d=a&&a.d;
+  if(!d||!d.dash||d.pushR===undefined)return null;
+  return (a.t>=d.dash.s&&a.t<d.dash.e)?d.pushR:null}
 function dashing(f){const a=f&&f.act;return !!(f.cpu&&a&&a.d.armor&&!(f.tw&&f.tw.noArmor)&&a.d.dash&&a.t>=a.d.dash.s&&a.t<a.d.dash.e)}
 // キャラ別に技の性能(判定回数・突進の有無など)を差し替える
 const MVCACHE={};
@@ -731,7 +748,7 @@ function frameOf(f,d,t,jd){
 /* ============ ファイター ============ */
 function mk(o){return{x:o.x,y:GROUND,vx:0,vy:0,face:o.face,hp:100,hpG:100,sp:0,wins:0,
   state:'idle',st:0,anim:0,act:null,jd:0,airAtk:false,onG:true,
-  hitstun:0,blockstun:0,flash:0,downT:0,stun:0,dizzyT:0,thrown:0,winT:0,chain:0,chainT:0,cmb:0,cmbT:0,cmbN:0,finKey:null,tp:null,
+  hitstun:0,blockstun:0,flash:0,downT:0,stun:0,dizzyT:0,thrown:0,winT:0,chain:0,chainT:0,cmb:0,cmbT:0,cmbN:0,finKey:null,tp:null,inv:0,parryT:0,cnt:0,pfx:0,fwHeld:false,
   ch:o.ch||'bl',name:o.name,cpu:!!o.cpu,sheet:o.sheet,lvl:o.lvl||1,
   ai:{m:'wait',t:0,cd:0},lastX:0,hold:false}}
 let p1=mk({x:130,face:1,ch:'bl',name:'BRUTS LEE',sheet:'p'});
@@ -989,7 +1006,7 @@ netModal.addEventListener('pointerdown',e=>e.stopPropagation());
 
 function reset(f,x,face){f.x=x;f.y=GROUND;f.vx=0;f.vy=0;f.face=face;f.hp=100;f.hpG=100;f.sp=0;
   f.state='idle';f.st=0;f.act=null;f.jd=0;f.airAtk=false;f.onG=true;f.hitstun=0;f.blockstun=0;
-  f.flash=0;f.downT=0;f.stun=0;f.dizzyT=0;f.thrown=0;f.winT=0;f.chain=0;f.chainT=0;f.cmb=0;f.cmbT=0;f.cmbN=0;f.finKey=null;stopMvSnd(f);f.ai.m='wait';f.ai.t=0;f.ai.cd=0;f.inpBuf=[]}
+  f.flash=0;f.downT=0;f.stun=0;f.dizzyT=0;f.thrown=0;f.winT=0;f.chain=0;f.chainT=0;f.cmb=0;f.cmbT=0;f.cmbN=0;f.finKey=null;f.inv=0;f.parryT=0;f.cnt=0;f.pfx=0;f.bsHeld=false;f.bsGap=0;f.bsHoldT=0;f.fwHeld=false;stopMvSnd(f);f.ai.m='wait';f.ai.t=0;f.ai.cd=0;f.inpBuf=[]}
 function startRound(nm){g.perf=false;if(nm){p1.wins=0;p2.wins=0;g.round=1;p1.tp=tpNew();p2.tp=tpNew();g.tp=null}
   // 8面のGOD Xは、プレイヤーが1セット先取するとラウンド開始時に第2段階へ(背景と強さが変わる)
   g.gx2=(!NET.connected&&g.stage===8&&p1.wins>=1);
@@ -1015,6 +1032,7 @@ function xmin(){return isElev()?96:XMIN}
 function xmax(){return isElev()?312:XMAX}
 function hurt(f){
   if(f.state==='down'||f.thrown)return null;
+  if(f.inv>0)return null;              // 見切り(その場回避)の無敵
   const c=(f.state==='crouch'||(f.act&&f.act.d.crouch));
   const bs=(CH[f.ch]&&CH[f.ch].bodyScale)||1;   // 身長差(T.K.1.04 / BRUTS LEE1.0 / MC.KAM0.95)
   const h=(c?80:(f.onG?118:104))*bs;
@@ -1147,7 +1165,9 @@ function doHit(att,def,hb,cx,cy,key){
     g.hitstop=4;spark(cx,cy,false);sfx(hitSnd(att),0.8);
     if(def.hp<=0)knock(def,att);
     return}
-  const stunned=def.dizzyT>0;                          // スタン中の被弾
+  const cnt=(att.cnt||0)>0;                            // 見切り直後のカウンター
+  if(cnt){att.cnt=0;g.cntT=44;g.cntX=cx;g.cntY=cy;sfx('o',1,1.25)}
+  const stunned=def.dizzyT>0||cnt;                     // スタン中の被弾 / カウンター
   const dmg=hb.dmg*(stunned?1.5:1)*atkRate(att);       // ダメージ1.5倍(中ボス2の敵は攻撃力補正)
   if(stunned)def.dizzyT=0;
   def.hp=Math.max(0,def.hp-dmg);
@@ -1197,13 +1217,18 @@ function startMove(f,key){
 // 方向入力を数フレーム分バッファし、Xボタンとの同時押しの精度要求を緩和する
 const INPBUF_LEN=10;
 /* ---- バックステップ: 後ろを2回連続で押すと、低く素早く後ろへ跳ぶ(途中で攻撃不可) ---- */
-const BS_TAP=10,BS_GAP=12,BS_VX=5.6,BS_VY=-5.2;   // 1回目の押し時間上限 / 2回目までの猶予 / 横速度 / 跳ね上がり
+const BS_TAP=12,BS_GAP=15,BS_VX=5.6,BS_VY=-5.2;   // 1回目の押し時間上限 / 2回目までの猶予 / 横速度 / 跳ね上がり
+// 見切り用: 前方向を押し直した瞬間(ガード=後ろ入力とは別の操作にする)
+function forwardInput(f,inp){
+  if(f.cpu){f.fwHeld=false;return false}
+  const fw=(inp.x===f.face&&inp.y===0),press=fw&&!f.fwHeld;
+  f.fwHeld=fw;return press}
 function backstepInput(f,inp){
-  if(f.cpu)return false;                     // CPUの動きは今まで通り
+  if(f.cpu)return{fire:false,press:false};   // CPUの動きは今まで通り
   const back=(inp.x===-f.face&&inp.y===0);
-  let fire=false;
+  let fire=false,press=false;
   if(back){
-    if(!f.bsHeld){fire=f.bsGap>0;f.bsHoldT=0}
+    if(!f.bsHeld){press=true;fire=f.bsGap>0;f.bsHoldT=0}   // 押し直した瞬間
     f.bsHoldT=(f.bsHoldT||0)+1;
   }else if(f.bsHeld){
     f.bsGap=(f.bsHoldT<=BS_TAP)?BS_GAP:0;   // 短く押して離したら2回目を待つ
@@ -1211,7 +1236,37 @@ function backstepInput(f,inp){
   if(!back&&f.bsGap>0)f.bsGap--;
   f.bsHeld=back;
   if(fire){f.bsGap=0;f.bsHoldT=0}
-  return fire}
+  return{fire:fire,press:press}}
+/* ---- 見切りカウンター: 攻撃が当たる瞬間に前を1回入れると、その場でかわして反撃が強化される(ガードは後ろ入力なので別操作) ---- */
+const PARRY_INV=10,PARRY_POSE=16,PARRY_CNT=22,PARRY_WIN=5;   // 無敵/見切り姿勢/カウンター有効時間/前入力が有効な幅(技の発生フレームの前後5フレーム)
+function oppOf(f){
+  if(f!==p1)return p1;
+  const fs=foes();
+  return fs.reduce((b,o)=>(b===null||Math.abs(o.x-f.x)<Math.abs(b.x-f.x))?o:b,null)||p2}
+// これから当たる攻撃を探す。'melee'=打撃(カウンター可) 'proj'=飛び道具(回避のみ) null=見切れない
+function incomingHit(f,o){
+  const bb={x1:f.x-32,x2:f.x+32,y1:f.y-128,y2:f.y};        // 見切り判定は本来の体より少し広め
+  if(o&&o.act){
+    const d=o.act.d;
+    if(!d.rise){                                            // 対空技(昇り技)は見切れない
+      for(let i=0;i<d.hits.length;i++){const h=d.hits[i];
+        if(o.act.t>=h.s-PARRY_WIN&&o.act.t<=Math.min(h.s+PARRY_WIN,h.e-1)&&!o.act.used[i]){   // 発生フレーム(h.s)の前後3フレームだけ有効
+          const b=h.box,x1=o.x+(o.face>0?b[0]:-(b[0]+b[2]));
+          if(ov({x1:x1,x2:x1+b[2],y1:o.y+b[1],y2:o.y+b[1]+b[3]},bb))return 'melee'}}
+    }
+  }
+  for(const pr of projs){                                   // 飛び道具は回避だけできる
+    if(pr.own===f)continue;
+    for(let k=-PARRY_WIN;k<=PARRY_WIN;k++){             // 飛び道具も着弾の前後3フレームだけ有効
+      const x=pr.x+pr.vx*k;
+      if(ov({x1:x-(pr.bw||34),x2:x+(pr.bw||34),y1:pr.y+(pr.by0||-22),y2:pr.y+(pr.by1||22)},bb))return 'proj'}
+  }
+  return null}
+function startParry(f,melee){
+  f.state='dodge';f.st=0;f.act=null;f.vx=0;
+  f.inv=PARRY_INV;f.parryT=PARRY_POSE;f.pfx=PARRY_POSE;
+  f.cnt=melee?PARRY_CNT:0;                                  // 飛び道具の見切りはカウンターなし
+  g.hitstop=6;sfx('cur',1,2.6);sfx('k',0.5,2.2)}            // 甲高い見切り音
 function startBackstep(f){
   f.state='bstep';f.st=0;f.onG=false;f.vy=BS_VY;f.vx=-f.face*BS_VX;
   f.jd=-1;f.airAtk=true;sfx('w',0.35)}
@@ -1239,7 +1294,11 @@ function act(f,inp,btn){
     return}
   if(f.dizzyT>0){f.dizzyT--;if(f.dizzyT===0){f.state='idle';f.st=0}else{f.state='dizzy'}return}
   if(f.hitstun>0){f.hitstun--;if(f.hitstun===0&&f.onG){f.state='idle';f.st=0}return}
-  if(f.blockstun>0){f.blockstun--;if(f.blockstun===0)f.state='idle';return}
+  if(f.blockstun>0){                        // ガード硬直中でも「後ろを押し直す」と見切りに割り込める
+    const gfw=forwardInput(f,inp);backstepInput(f,inp);
+    if(gfw||(f.cpu&&btn.PARRY)){const inc=incomingHit(f,oppOf(f));   // ガード中でも前を押せば見切りに移行
+      if(inc){startParry(f,inc==='melee');return}}
+    f.blockstun--;if(f.blockstun===0)f.state='idle';return}
 
   if(f.state==='act'){
     const a=f.act,d=a.d;
@@ -1277,7 +1336,9 @@ function act(f,inp,btn){
     return}
 
   // 地上
-  const bs=backstepInput(f,inp);             // ←←(後ろ2回)の判定
+  const bs=backstepInput(f,inp);             // 後ろ2回連続=バックステップ
+  const fw=forwardInput(f,inp);              // 前1回=見切り
+  if(f.cpu&&btn.PARRY){const inc=incomingHit(f,oppOf(f));if(inc){startParry(f,inc==='melee');return}}
   if(f.cpu&&btn.BS){startBackstep(f);return} // CPUの緊急回避
   if(btn.X){
     // 必殺技1=→X(突進) / 必殺技2=←X(対空) / 必殺技3=↓X(飛び道具)
@@ -1292,7 +1353,9 @@ function act(f,inp,btn){
     if(inp.y>0)startMove(f,btn.A?'cpunch':'ckick');
     else startMove(f,btn.A?'punch':'kick');
     return}
-  if(bs){startBackstep(f);return}
+  if(fw){const inc=incomingHit(f,oppOf(f));                  // 攻撃が来ていれば前1回で見切り
+    if(inc){startParry(f,inc==='melee');return}}
+  if(bs.fire){startBackstep(f);return}                       // 後ろ2回連続はバックステップ
   if(inp.y<0){f.vy=-13.2;f.jd=inp.x===0?0:(inp.x===f.face?1:-1);
     f.vx=inp.x*4.3;f.onG=false;f.airAtk=false;f.state='jump';f.st=0;return}
   if(inp.y>0){f.state='crouch';f.vx=0;return}
@@ -1386,6 +1449,15 @@ function ai(f,o){
     if((f.blockstun>0||f.hitstun>0)&&!a.wasStun)a.press=(a.press||0)+1;
     a.wasStun=(f.blockstun>0||f.hitstun>0);
     if(a.press>0&&!a.wasStun)a.press=Math.max(0,a.press-1/70);
+  }
+  // --- 見切りカウンター: 当たる瞬間に合わせてその場回避を狙う(弱いCPUはほとんど使わない) ---
+  if(a.pCd>0)a.pCd--;
+  if(f.onG&&!f.act&&f.hitstun<=0&&f.state!=='land'&&f.state!=='bstep'&&(a.pCd||0)<=0){   // ガード硬直中も見切れる
+    if(incomingHit(f,o)==='melee'){
+      const cornered=(f.face>0?f.x-xmin():xmax()-f.x)<70;    // 壁際に詰められていたら積極的に見切る
+      const p=Math.max(0,(L.rea-0.085))*6*(cornered?2.2:1);   // 弱い〜普通のCPUはほとんど使わない
+      const pp=p*(f.blockstun>0?0.6:1);
+      if(Math.random()<Math.min(0.5,pp)){a.pCd=150;a.m='wait';a.t=12;btn.PARRY=true;return{inp:inp,btn:btn}}}
   }
   // --- 緊急回避: 目の前で攻撃を出されたら、たまにバックステップで逃げる ---
   if(a.bsCd>0)a.bsCd--;
@@ -1643,8 +1715,11 @@ function step(){
     const push=(md-Math.abs(dx))/2*(dx>=0?1:-1);
     const da=dashing(p1),db=dashing(o);
     let ra=0.5,rb=0.5;                       // 通常は半分ずつ押し合う
-    if(da&&!db){ra=0;rb=2}                   // 突進側は押し負けず、相手を丸ごと押し出す
+    if(da&&!db){ra=0;rb=2}                   // アーマー突進側は押し負けず、相手を丸ごと押し出す
     else if(db&&!da){ra=2;rb=0}
+    else{const pa=dashPushR(p1),pb2=dashPushR(o);   // 突進技ごとの押し戻され具合
+      if(pa!==null&&pb2===null){ra=pa;rb=1-pa}
+      else if(pb2!==null&&pa===null){rb=pb2;ra=1-pb2}}
     const cl=v=>Math.max(xmin(),Math.min(xmax(),v));
     const w1=p1.x+push*ra,w2=o.x-push*rb,n1=cl(w1),n2=cl(w2);
     p1.x=cl(n1-(w2-n2));                     // 壁で押し切れなかったぶんは押した側が下がる
@@ -1678,6 +1753,7 @@ function step(){
       if(pr.own===p1){const fs=foes();tg=fs.reduce((b,o)=>(b===null||Math.abs(o.x-pr.x)<Math.abs(b.x-pr.x))?o:b,null)||p2}
       const bb=tg?hurt(tg):null;
       const pb={x1:pr.x-(pr.bw||34),x2:pr.x+(pr.bw||34),y1:pr.y+(pr.by0||-22),y2:pr.y+(pr.by1||22)};
+      if(bb&&ov(pb,bb)&&projDodging(tg)){continue}   // 突進技の無敵区間: 飛び道具はそのまま通り抜ける
       if(bb&&ov(pb,bb)){
         if(guarding(tg,pr.own.x)){tg.blockstun=15;tg.state='guard';tg.st=0;tg.sp=Math.min(50,tg.sp+5);
           tg.hp=Math.max(1,tg.hp-pr.dmg*0.5*atkRate(pr.own));spark(pr.x,pr.y,false);
@@ -1703,6 +1779,8 @@ function step(){
     if(f.flash>0)f.flash--;if(f.stun>-14)f.stun-=0.05;
     if(f.chainT>0){f.chainT--;if(f.chainT===0)f.chain=0}
     if(f.cmbT>0)f.cmbT--;
+    if(g.cntT>0)g.cntT--;
+    if(f.inv>0)f.inv--;if(f.parryT>0)f.parryT--;if(f.cnt>0)f.cnt--;if(f.pfx>0)f.pfx--;
     if(f.hpG>f.hp)f.hpG=Math.max(f.hp,f.hpG-0.8);else f.hpG=f.hp});
   fx();
   netHostSnapshot();
@@ -1825,6 +1903,7 @@ function nextRound(){
 function poseKey(f){
   if(f.thrown)return null;
   const P=CH[f.ch].pose;
+  if(f.parryT>0&&(f.state==='dodge'||f.state==='idle'||f.state==='walk'||f.state==='walkb'))return P.crouch;  // その場でかわす姿勢
   switch(f.state){
     case 'down':{
       if(!f.onG)return P.downAir;
@@ -1924,11 +2003,12 @@ function sfxInit(){
     }
   }catch(e){sctx=null}
 }
-function sfx(id,vol){
+function sfx(id,vol,rate){
   try{
     if(!sfxOn||!sctx||!sbuf[id])return null;
     if(sctx.state==='suspended')sctx.resume();
     const s=sctx.createBufferSource();s.buffer=sbuf[id];
+    if(rate)try{s.playbackRate.value=rate}catch(e){}
     const gn=sctx.createGain();gn.gain.value=(vol===undefined?1:vol);
     s.connect(gn);gn.connect(sctx.destination);s.start(0);
     return s;
@@ -2163,6 +2243,23 @@ function drawPause(){
   }
   txt('PUSH  II  TO RESUME',200,232,'#a0a0c0',1,'center')}
 
+/* ---- 見切り(その場回避)のエフェクト ---- */
+function drawParryFx(f){
+  if(!f||f.pfx<=0)return;
+  const t=PARRY_POSE-f.pfx,y=f.y-60,r=6+t*4.5,a=Math.max(0,1-t/PARRY_POSE);
+  ctx.save();ctx.globalAlpha=a;
+  ctx.strokeStyle='#d8f8ff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(f.x,y,r,0,Math.PI*2);ctx.stroke();
+  ctx.strokeStyle='#6fe0ff';ctx.lineWidth=1;ctx.beginPath();ctx.arc(f.x,y,r*0.6,0,Math.PI*2);ctx.stroke();
+  for(let i=0;i<4;i++){const an=i*Math.PI/2+t*0.15;    // 十字の閃光
+    px(Math.round(f.x+Math.cos(an)*r)-1,Math.round(y+Math.sin(an)*r)-1,3,3,'#ffffff')}
+  ctx.restore();
+  if(t<3){px(0,0,W,H,'rgba(216,248,255,'+(0.22-t*0.07)+')')}}
+/* ---- COUNTER!! ---- */
+function drawCounterMsg(){
+  if(!g.cntT||g.cntT<=0)return;
+  const t=44-g.cntT,y=Math.max(40,Math.min(150,(g.cntY||110)-40))-([8,4,1][t]||0);
+  if(g.cntT<14&&(g.cntT>>1)%2)return;
+  pfOr('tt','COUNTER!!',Math.max(70,Math.min(330,g.cntX||200)),y,(t>>2)%2?'fire':'gold','center','#ff8030',2)}
 /* ---- コンボ表示 ---- */
 function drawCombo(f,right){
   if(!f||f.cmbT<=0||f.cmb<2)return;
@@ -2276,6 +2373,8 @@ function render(){
       ctx.save();ctx.beginPath();ctx.rect(-20,0,TW_DOOR_CLIP+20,H);ctx.clip();drawFighter(f);ctx.restore()}
     else drawFighter(f)});
   drawSparks();
+  [p1,p2].concat(mobs).forEach(drawParryFx);
+  drawCounterMsg();
   if(g.flash>0)px(0,0,W,H,'rgba(255,255,255,0.45)');
   drawHud();
   if(g.phase==='fight'||g.phase==='ko'){drawCombo(p1,false);drawCombo(p2,true)}
