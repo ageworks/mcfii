@@ -222,6 +222,15 @@
   #kcDev{margin:0 0 8px;flex-wrap:wrap}
   #kcDev button{min-height:30px;padding:5px 10px;font-size:12px;background:#252b3e;color:#c8cce0}
   #kcDev button.on{background:#166a3f;color:#fff;outline:2px solid #70d89b}
+  /* スマホをゲームパッドにする(QR) */
+  #kcPhone{margin:2px 0 10px;padding:8px;border:1px dashed #3a4460;border-radius:10px;background:#161b2a}
+  #kcPhone button.ph{background:#1d4f7a;color:#fff}
+  #kcPhoneQr{display:inline-block;background:#fff;padding:8px;border-radius:8px;margin:6px auto 2px}
+  #kcPhoneQr img,#kcPhoneQr canvas{display:block;width:180px;height:180px}
+  #kcPhoneMsg{margin:4px 0 6px;color:#9ad8ff;font-weight:700;font-size:12px;word-break:break-all}
+  #kcPhoneMsg.on{color:#70d89b}#kcPhoneMsg.err{color:#ff8a8a}
+  /* スマホ側: コントローラー専用画面 */
+  body.padmode #bBgm,body.padmode #netLaunch,body.padmode #bVs,body.padmode #bKeycfg,body.padmode #netBadge,body.padmode #displayHint{display:none!important}
 
 </style>
 </head>
@@ -244,6 +253,9 @@
     <div class="row" id="kcTabs"><button id="kcTab1" class="tab on">PLAYER 1</button><button id="kcTab2" class="tab">PLAYER 2</button></div>
     <p id="kcPad">ゲームパッド：未接続</p>
     <div class="row" id="kcDev"></div>
+    <div id="kcPhone"><button id="kcPhoneBtn" class="ph">スマホをゲームパッドにする（QRコード）</button>
+      <div id="kcPhoneBox" style="display:none"><div id="kcPhoneQr"></div><p id="kcPhoneMsg"></p>
+      <div class="row"><button id="kcPhoneOff">スマホとの接続を終了</button></div></div></div>
     <table id="kcTable"><thead><tr><th></th><th>キーボード1</th><th>キーボード2</th><th>ゲームパッド</th></tr></thead><tbody></tbody></table>
     <p id="kcMsg">変更したい欄をクリックして、割り当てたいキー／ボタンを押してください。<br>Esc：取り消し　Backspace：割り当てを外す（キーボード）</p>
     <div class="row"><button id="kcReset">初期設定に戻す</button><button id="kcClose" class="ok">閉じる</button></div>
@@ -444,6 +456,7 @@ function spr(key,x,y,face,sheet){
 const pad={x:0,y:0},held={A:false,B:false,X:false},edge={A:false,B:false,X:false};
 function pressBtn(k){audioUnlock();if(!held[k])edge[k]=true;held[k]=true}
 function togglePause(){
+  if(PADQ){padPause();return}          // スマホ(コントローラー)側: PCへPAUSEを送る
   if(NET.connected)return;            // オンライン対戦中は相手が居るため一時停止できない
   if(g.phase==='title'){              // タイトルで4回押すとデバッグ画面
     const now=Date.now();
@@ -483,7 +496,11 @@ addEventListener('pointercancel',e=>{if(e.pointerId===sid)sreset()});
 });
 /* ============ PCモード / キーボード / ゲームパッド ============ */
 // PCブラウザ(マウス等の細かいポインタ+ホバー可能)ならPCモード。URLに ?pc=1 / ?pc=0 で強制切替も可能
+// ?pad=<ID>&pl=1|2 で開かれたら、この端末はPC版のゲームパッド(コントローラー専用画面)として動く
+const PADQ=(function(){try{const q=new URLSearchParams(location.search),id=q.get('pad');
+  if(id&&/^mcf2pad-[a-z0-9]{6,20}$/.test(id))return{id:id,pl:q.get('pl')==='2'?2:1}}catch(e){}return null})();
 const IS_PC=(function(){
+  if(PADQ)return false;
   try{const q=new URLSearchParams(location.search);if(q.get('pc')==='1')return true;if(q.get('pc')==='0')return false}catch(e){}
   try{return matchMedia('(hover:hover) and (pointer:fine)').matches}catch(e){return false}})();
 if(IS_PC)document.body.classList.add('pc');
@@ -513,19 +530,20 @@ try{const s=JSON.parse(localStorage.getItem(KC_KEY)||'null');
 function kcSave(){try{localStorage.setItem(KC_KEY,JSON.stringify(KC))}catch(e){}}
 const PL=['p1','p2'];
 const kbDown={};                                    // 押されているキー(e.code)
-const srcHeld={p1:{kb:{A:false,B:false,X:false},gp:{A:false,B:false,X:false}},p2:{kb:{A:false,B:false,X:false},gp:{A:false,B:false,X:false}}};
-const dirSrc={p1:{kb:{x:0,y:0},gp:{x:0,y:0}},p2:{kb:{x:0,y:0},gp:{x:0,y:0}}};
+const srcHeld={p1:{kb:{A:false,B:false,X:false},gp:{A:false,B:false,X:false},rp:{A:false,B:false,X:false}},p2:{kb:{A:false,B:false,X:false},gp:{A:false,B:false,X:false},rp:{A:false,B:false,X:false}}};
+const dirSrc={p1:{kb:{x:0,y:0},gp:{x:0,y:0},rp:{x:0,y:0}},p2:{kb:{x:0,y:0},gp:{x:0,y:0},rp:{x:0,y:0}}};   // rp: QRでつないだスマホ
 const gpPrevPause={p1:false,p2:false};let gpNames=['',''];
 function keyOwner(code){for(const p of PL)for(const a of ACTS)if((KC[p].key[a]||[]).indexOf(code)>=0)return[p,a];return null}
 function kbAct(p,a){return (KC[p].key[a]||[]).some(c=>c&&kbDown[c])}
 function setBtn(p,s,k,on){const H=srcHeld[p],was=H[s][k];H[s][k]=on;
   const press=p==='p1'?pressBtn:pressBtn2,release=p==='p1'?releaseBtn:releaseBtn2;
   if(on&&!was)press(k);
-  else if(!on&&was&&!(H.kb[k]||H.gp[k]))release(k)}
+  else if(!on&&was&&!(H.kb[k]||H.gp[k]||H.rp[k]))release(k)}
 function applyDir(){
   const d1=dirSrc.p1,d2=dirSrc.p2,cl=v=>Math.max(-1,Math.min(1,v));
-  if(sid===null){pad.x=cl(d1.kb.x+d1.gp.x);pad.y=cl(d1.kb.y+d1.gp.y)}   // タッチのスティック操作中はそちらを優先
-  pad2.x=cl(d2.kb.x+d2.gp.x);pad2.y=cl(d2.kb.y+d2.gp.y)}
+  if(PADQ)return;                                                         // スマホ側(コントローラー専用)はタッチ操作のみ
+  if(sid===null){pad.x=cl(d1.kb.x+d1.gp.x+d1.rp.x);pad.y=cl(d1.kb.y+d1.gp.y+d1.rp.y)}   // タッチのスティック操作中はそちらを優先
+  pad2.x=cl(d2.kb.x+d2.gp.x+d2.rp.x);pad2.y=cl(d2.kb.y+d2.gp.y+d2.rp.y)}
 function kbSync(){for(const p of PL){const d=dirSrc[p].kb;
     d.x=(kbAct(p,'RIGHT')?1:0)-(kbAct(p,'LEFT')?1:0);d.y=(kbAct(p,'DOWN')?1:0)-(kbAct(p,'UP')?1:0);
     ['A','B','X'].forEach(k=>setBtn(p,'kb',k,kbAct(p,k)))}
@@ -601,7 +619,8 @@ function kcRender(){
       td.addEventListener('click',()=>{kcStart(kind,a,slot)});
       tr.appendChild(td)});
     tb.appendChild(tr)}
-  document.getElementById('kcPad').textContent=kcPadText()}
+  document.getElementById('kcPad').textContent=kcPadText();
+  rpRender()}
 function kcStart(kind,a,slot){
   const gp=gpList()[KC[kcPl].dev],base={};
   if(gp){gp.buttons.forEach((b,i)=>{if(b.pressed||b.value>0.5)base['b'+i]=1});
@@ -625,6 +644,66 @@ function kcOnPad(gp){
   const C=KC[kcCap.pl];
   for(const b of ACTS)if(C.pad[b]===code)C.pad[b]=null;           // 同じゲームパッド内の重複を外す
   C.pad[kcCap.act]=code;kcCap=null;kcSave();kcRender()}
+/* ---- スマホをゲームパッドにする(QRコード) ----
+   PC: PeerJSでID付きの待ち受けを作り、そのIDを入れたURLをQRコードで表示する。
+   スマホ: QRを読むと同じページが ?pad=ID で開き、コントローラー専用画面になって入力を送ってくる。 */
+const RP={p1:{peer:null,conn:null,id:null,st:'idle',msg:'',lastRx:0,qrFor:''},p2:{peer:null,conn:null,id:null,st:'idle',msg:'',lastRx:0,qrFor:''}};
+function rpLoadLib(){return new Promise((res,rej)=>{
+  if(window.Peer)return res();
+  const urls=['https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js','https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js'];let i=0;
+  const next=()=>{if(i>=urls.length)return rej(new Error('peerjs'));const sc=document.createElement('script');sc.src=urls[i++];
+    sc.onload=()=>window.Peer?res():next();sc.onerror=next;document.head.appendChild(sc)};next()})}
+function rpNewId(){const c='abcdefghijkmnpqrstuvwxyz23456789';let r='';for(let i=0;i<10;i++)r+=c[Math.random()*c.length|0];return 'mcf2pad-'+r}
+function rpUrl(pl){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('pad',RP[pl].id);u.searchParams.set('pl',pl==='p1'?'1':'2');return u.toString()}
+function rpClear(pl){const D=dirSrc[pl].rp;D.x=0;D.y=0;['A','B','X'].forEach(k=>setBtn(pl,'rp',k,false));applyDir()}
+function rpRx(pl,d){const R=RP[pl];R.lastRx=performance.now();if(!d||typeof d!=='object')return;
+  if(d.t==='s'){const D=dirSrc[pl].rp,cl=v=>Math.max(-1,Math.min(1,v|0));D.x=cl(d.x);D.y=cl(d.y);
+    setBtn(pl,'rp','A',!!(d.b&1));setBtn(pl,'rp','B',!!(d.b&2));setBtn(pl,'rp','X',!!(d.b&4));applyDir()}
+  else if(d.t==='pz'){if(!kcIsOpen())togglePause()}}
+async function rpStart(pl){
+  const R=RP[pl];
+  if(!/^https?:$/.test(location.protocol)){R.st='err';R.msg='この機能は公開URL（https://〜）でゲームを開いている時だけ使えます。';kcRender();return}
+  if(R.peer&&!R.peer.destroyed){kcRender();return}
+  R.st='loading';R.msg='';kcRender();
+  try{await rpLoadLib()}catch(e){R.st='err';R.msg='通信の準備に失敗しました。インターネット接続を確認してください。';kcRender();return}
+  const peer=new Peer(rpNewId(),{debug:0});R.peer=peer;R.id=peer.id||null;
+  peer.on('open',id=>{R.id=id;if(R.st!=='on')R.st='wait';kcRender()});
+  peer.on('connection',conn=>{
+    if(R.conn&&R.conn.open){try{R.conn.close()}catch(e){}}             // 新しく読み取ったスマホを優先
+    R.conn=conn;
+    conn.on('open',()=>{R.st='on';R.lastRx=performance.now();try{conn.send({t:'hi',pl:pl==='p1'?1:2})}catch(e){};kcRender()});
+    conn.on('data',d=>rpRx(pl,d));
+    conn.on('close',()=>{if(R.conn===conn){R.conn=null;if(R.peer)R.st='wait';rpClear(pl);kcRender()}});
+    conn.on('error',()=>{})});
+  peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(e){}});
+  peer.on('error',e=>{if(R.st==='on')return;R.st='err';R.msg='接続エラー（'+((e&&e.type)||'unknown')+'）。もう一度お試しください。';kcRender()});
+  kcRender()}
+function rpStop(pl){const R=RP[pl];
+  if(R.conn){try{R.conn.send({t:'bye'})}catch(e){};try{R.conn.close()}catch(e){}}
+  if(R.peer){try{R.peer.destroy()}catch(e){}}
+  R.peer=null;R.conn=null;R.id=null;R.st='idle';R.msg='';R.qrFor='';rpClear(pl);kcRender()}
+// 通信が途切れたままボタンが押しっぱなしにならないよう、1.5秒届かなければ入力を離す
+setInterval(()=>{for(const pl of PL){const R=RP[pl];if(R.st==='on'&&performance.now()-R.lastRx>1500)rpClear(pl)}},500);
+function rpRender(){
+  const R=RP[kcPl],btn=$('kcPhoneBtn'),box=$('kcPhoneBox'),qr=$('kcPhoneQr'),msg=$('kcPhoneMsg'),off=$('kcPhoneOff');
+  if(!btn)return;const P='PLAYER '+(kcPl==='p1'?1:2);
+  btn.style.display=(R.st==='idle'||R.st==='err')?'inline-block':'none';
+  btn.textContent=R.st==='err'?'もう一度QRコードを表示する':'スマホを'+P+'のゲームパッドにする（QRコード）';
+  box.style.display=R.st==='idle'?'none':'block';
+  if(R.st==='err'&&!R.msg)box.style.display='none';
+  off.style.display=(R.st==='wait'||R.st==='on')?'inline-block':'none';
+  msg.className=R.st==='on'?'on':(R.st==='err'?'err':'');
+  const showQr=R.st==='wait'&&R.id;
+  qr.style.display=showQr?'inline-block':'none';
+  if(showQr){const url=rpUrl(kcPl);
+    if(R.qrFor!==url){qr.innerHTML='';R.qrFor=url;
+      if(window.QRCode)new QRCode(qr,{text:url,width:180,height:180,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
+      else{qr.style.color='#000';qr.style.fontSize='11px';qr.style.maxWidth='240px';qr.textContent=url}}}
+  else{qr.innerHTML='';R.qrFor=''}
+  msg.textContent=R.st==='loading'?'準備中…':
+    R.st==='wait'?(R.id?'スマホのカメラでQRコードを読み取ってください（'+P+'用）':'準備中…'):
+    R.st==='on'?'● スマホを'+P+'のゲームパッドとして接続中':
+    R.st==='err'?R.msg:''}
 function kcShow(){
   if(g.phase==='fight'&&!g.paused&&!NET.connected)g.paused=true;       // 戦闘中なら一時停止
   for(const c in kbDown)kbDown[c]=false;kbSync();
@@ -632,6 +711,8 @@ function kcShow(){
 function kcHide(){kcCap=null;document.getElementById('kcModal').classList.remove('show')}
 document.getElementById('bKeycfg').addEventListener('click',e=>{e.stopPropagation();audioUnlock();kcShow()});
 document.getElementById('kcClose').addEventListener('click',kcHide);
+document.getElementById('kcPhoneBtn').addEventListener('click',()=>{const R=RP[kcPl];if(R.st==='err'){R.st='idle';if(R.peer){try{R.peer.destroy()}catch(e){};R.peer=null}}rpStart(kcPl)});
+document.getElementById('kcPhoneOff').addEventListener('click',()=>rpStop(kcPl));
 document.getElementById('kcTab1').addEventListener('click',()=>{kcPl='p1';kcCap=null;kcRender()});
 document.getElementById('kcTab2').addEventListener('click',()=>{kcPl='p2';kcCap=null;kcRender()});
 document.getElementById('kcReset').addEventListener('click',()=>{KC[kcPl]=JSON.parse(JSON.stringify(KC_DEF[kcPl]));kcCap=null;kcSave();kcRender()});
@@ -640,6 +721,7 @@ setInterval(()=>{if(kcIsOpen()&&!kcCap){document.getElementById('kcPad').textCon
 // ---- VS(同じブラウザで2人対戦) ----
 document.getElementById('bVs').addEventListener('click',e=>{e.stopPropagation();audioUnlock();vsEnter()});
 cv.addEventListener('pointerdown',e=>{
+  if(PADQ){padTap();e.preventDefault();return}     // コントローラー画面: 切断中ならタップで再接続
   if(g.phase==='title'){const r=cv.getBoundingClientRect(),tx=(e.clientX-r.left)/r.width*W,ty=(e.clientY-r.top)/r.height*H;
     if(ty>196&&ty<256){
       if(tx>=200&&!towerUnlocked){e.preventDefault();return}   // 未解放のTOWERをタップしても何も起きない
@@ -2822,7 +2904,50 @@ function render(){
   ctx.restore()}
 
 let acc=0,last=performance.now();const ST=1000/60;
+/* ---- スマホ(コントローラー専用画面)側 ---- */
+const PAD={peer:null,conn:null,st:'init',msg:'',last:'',lastT:0,bits:0,t0:0};
+function padSend(o){if(PAD.conn&&PAD.conn.open){try{PAD.conn.send(o)}catch(e){}}}
+function padPause(){padSend({t:'pz'});if(navigator.vibrate)try{navigator.vibrate(15)}catch(e){}}
+async function padConnect(){
+  PAD.st='conn';PAD.msg='';
+  try{await rpLoadLib()}catch(e){PAD.st='err';PAD.msg='NETWORK ERROR (CHECK INTERNET)';return}
+  if(PAD.peer){try{PAD.peer.destroy()}catch(e){}}
+  const peer=new Peer({debug:0});PAD.peer=peer;
+  peer.on('open',()=>{const c=peer.connect(PADQ.id,{serialization:'json',reliable:true});PAD.conn=c;
+    c.on('open',()=>{PAD.st='on';PAD.last='';c.send({t:'hello',pl:PADQ.pl})});
+    c.on('data',d=>{if(d&&d.t==='bye'){PAD.st='off';PAD.msg='PC CLOSED THE CONNECTION'}});
+    c.on('close',()=>{if(PAD.st==='on'){PAD.st='off';PAD.msg='CONNECTION LOST'}});
+    c.on('error',()=>{})});
+  peer.on('error',e=>{if(PAD.st==='on')return;PAD.st='err';PAD.msg=(e&&e.type==='peer-unavailable')?'PC NOT FOUND - SHOW THE QR CODE AGAIN':'CONNECTION ERROR ('+String((e&&e.type)||'unknown').toUpperCase()+')'})}
+function padTap(){if(PAD.st==='err'||PAD.st==='off')padConnect()}
+function padTick(now){
+  const b=(held.A?1:0)|(held.B?2:0)|(held.X?4:0),x=pad.x>0.5?1:pad.x<-0.5?-1:0,y=pad.y>0.5?1:pad.y<-0.5?-1:0;
+  if((b&~PAD.bits)&&navigator.vibrate)try{navigator.vibrate(10)}catch(e){}   // ボタンを押した瞬間だけ軽く振動
+  PAD.bits=b;
+  const key=x+','+y+','+b;
+  if(key!==PAD.last||now-PAD.lastT>250){padSend({t:'s',x:x,y:y,b:b});PAD.last=key;PAD.lastT=now}   // 変化時+定期送信
+  padDraw(x,y,b)}
+function padDraw(x,y,b){
+  px(0,0,W,H,'#0b0d18');
+  for(let i=0;i<H;i+=4)px(0,i,W,1,'rgba(255,255,255,0.025)');
+  txs('CONTROLLER MODE',200,26,'#f0c020',2,'center');
+  txs('PLAYER '+PADQ.pl,200,58,PADQ.pl===1?'#ffd84a':'#70d8ff',3,'center');
+  const st=PAD.st,col=st==='on'?'#70d89b':(st==='err'||st==='off')?'#ff8a8a':'#9ad8ff';
+  const tt=st==='on'?'CONNECTED':st==='conn'||st==='init'?'CONNECTING'+'...'.slice(0,((Date.now()/300)|0)%4):'DISCONNECTED';
+  txs(tt,200,98,col,2,'center');
+  if(PAD.msg)txt(PAD.msg,200,124,'#c9cfdd',1,'center');
+  if(st==='err'||st==='off')txt('TAP  HERE  TO  RECONNECT',200,140,'#ffffff',1,'center');
+  // いまの入力を表示(方向と A/B/X)
+  const cx=120,cy=210;px(cx-44,cy-44,88,88,'#1a1f33');
+  [[0,-1],[0,1],[-1,0],[1,0]].forEach(([dx,dy])=>{const on=(dx&&dx===x)||(dy&&dy===y);px(cx+dx*28-12,cy+dy*28-12,24,24,on?'#f0c020':'#343b52')});
+  px(cx-10,cy-10,20,20,'#252b3e');
+  [['X',4,262,184,'#3a78e8'],['A',1,318,210,'#e04848'],['B',2,262,236,'#e8b020']].forEach(([n,m,bx,by,c])=>{
+    px(bx-18,by-18,36,36,(b&m)?c:'#252b3e');txs(n,bx,by-8,(b&m)?'#fff':'#8a90a8',2,'center')})}
+if(PADQ){document.body.classList.add('padmode');
+  try{if(navigator.wakeLock)navigator.wakeLock.request('screen').catch(()=>{})}catch(e){}   // 操作中に画面が消えないように
+  padConnect()}
 function loop(now){requestAnimationFrame(loop);
+  if(PADQ){padTick(now);return}             // コントローラー専用画面ではゲーム本体を動かさない
   try{pollPads()}catch(e){}                // USBゲームパッドの読み取り
   let dt=now-last;last=now;if(dt>200)dt=200;acc+=dt;let n=0;
   while(acc>=ST&&n<5){step();acc-=ST;n++}
