@@ -472,17 +472,25 @@ const stick=document.getElementById('stick'),knob=document.getElementById('knob'
 for(let i=0;i<8;i++){const t=document.createElement('div');t.className='tick';
   t.style.left='50%';t.style.top='50%';t.style.transform='translate(-50%,-100%) rotate('+(i*45)+'deg)';stick.appendChild(t)}
 let sid=null;
+// 上下左右・斜めの8方向はそれぞれ45度ずつ。いったん入った方向は、隣の方向へ STICK_HY(=15度)余分に倒すまで維持する(多少のズレを許容)
+const STICK_HY=15/45,STICK_TB=[[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+let stickDir=-1,sOrg=null;                          // stickDir: 今の方向(0〜7, -1=ニュートラル) / sOrg: 触れ始めの位置(中心付近に触れた時の基準点)
 function smove(e){
-  const r=stick.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2;
-  const dx=e.clientX-cx,dy=e.clientY-cy,rad=r.width/2,len=Math.hypot(dx,dy),cl=Math.min(len,rad*0.62);
+  const r=stick.getBoundingClientRect(),rad=r.width/2;
+  const cx=sOrg?sOrg.x:r.left+r.width/2,cy=sOrg?sOrg.y:r.top+r.height/2;
+  const dx=e.clientX-cx,dy=e.clientY-cy,len=Math.hypot(dx,dy),cl=Math.min(len,rad*0.62);
   const nx=len?dx/len*cl:0,ny=len?dy/len*cl:0;
   knob.style.transform='translate(calc(-50% + '+nx+'px),calc(-50% + '+ny+'px))';
-  if(len<rad*0.26){pad.x=0;pad.y=0;return}
-  const o=Math.round(Math.atan2(dy,dx)/(Math.PI/4)),tb=[[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
-  const v=tb[((o%8)+8)%8];pad.x=v[0];pad.y=v[1];
+  if(len<rad*(stickDir<0?0.26:0.20)){stickDir=-1;pad.x=0;pad.y=0;return}   // 遊び(戻す時は少し狭く)
+  const ang=Math.atan2(dy,dx)/(Math.PI/4);           // 45度=1
+  let o=Math.round(ang);
+  if(stickDir>=0){let df=ang-stickDir;df=((df+4)%8+8)%8-4;if(Math.abs(df)<0.5+STICK_HY)o=stickDir}
+  o=((o%8)+8)%8;stickDir=o;pad.x=STICK_TB[o][0];pad.y=STICK_TB[o][1];
 }
-function sreset(){pad.x=0;pad.y=0;sid=null;knob.style.transform='translate(-50%,-50%)'}
+function sreset(){pad.x=0;pad.y=0;sid=null;stickDir=-1;sOrg=null;knob.style.transform='translate(-50%,-50%)'}
 document.getElementById('stickZone').addEventListener('pointerdown',e=>{if(document.body.classList.contains('pc'))return;sid=e.pointerId;
+  {const r=stick.getBoundingClientRect(),ddx=e.clientX-(r.left+r.width/2),ddy=e.clientY-(r.top+r.height/2);
+   sOrg=Math.hypot(ddx,ddy)<r.width/2*0.26?{x:e.clientX,y:e.clientY}:null;stickDir=-1}   // 中心付近に触れた時は、その位置を基準にする
   e.target.setPointerCapture&&e.target.setPointerCapture(e.pointerId);smove(e);e.preventDefault()});
 addEventListener('pointermove',e=>{if(e.pointerId===sid)smove(e)});
 addEventListener('pointerup',e=>{if(e.pointerId===sid)sreset()});
@@ -659,6 +667,7 @@ function rpUrl(pl){const u=new URL(location.href);u.search='';u.hash='';u.search
   u.searchParams.set('sig',RP[pl].sig||'n');u.searchParams.set('rl',String(RP[pl].rl>=0?RP[pl].rl:-1));return u.toString()}
 function rpClear(pl){const D=dirSrc[pl].rp;D.x=0;D.y=0;['A','B','X'].forEach(k=>setBtn(pl,'rp',k,false));applyDir()}
 function rpRx(pl,d){const R=RP[pl];R.lastRx=performance.now();if(!d||typeof d!=='object')return;
+  if(d.t==='hello'||d.t==='vk'){R.mvKey=true;return}   // 接続直後・再同期の要求 → 次は全体を送る
   if(d.t==='s'){const D=dirSrc[pl].rp,cl=v=>Math.max(-1,Math.min(1,v|0));D.x=cl(d.x);D.y=cl(d.y);
     setBtn(pl,'rp','A',!!(d.b&1));setBtn(pl,'rp','B',!!(d.b&2));setBtn(pl,'rp','X',!!(d.b&4));applyDir()}
   else if(d.t==='pz'){if(!kcIsOpen())togglePause()}}
@@ -723,7 +732,7 @@ function pipeOpen(base,role,id,onMsg){
   async function pump(){if(busy)return;busy=true;
     while(api.open&&q.length&&api.sendPath){const m=q.shift(),path=api.sendPath(sseq++);
       try{await fetch(path,{method:'POST',body:JSON.stringify(m)})}catch(e){}}busy=false}
-  api.pub=(x,obj)=>{if(obj.t==='s')q=q.filter(v=>v.t!=='s');q.push(obj);pump()};
+  api.pub=(x,obj)=>{if(obj.t==='s'||obj.t==='v'){const tt=obj.t;q=q.filter(v=>v.t!==tt)}q.push(obj);pump()};
   if(role==='pad'){const ss=Math.random().toString(36).slice(2,10);api.cur=ss;
     api.sendPath=n=>P(ss+'-u-'+n);
     fetch(P('hello'),{method:'POST',body:JSON.stringify({s:ss})}).catch(()=>{});
@@ -773,9 +782,38 @@ async function rpStart(pl){
     catch(e){R.relay=null}}
   if(!nt&&!R.relay){rpStartPeer(pl);return}             // ①②とも届かない → ③PeerJS
   R.sig=nt?'n':'x';R.st='wait';kcRender()}
+/* ---- ゲーム画面のミラー: PCのゲーム状態をスマホへ送り、スマホ側で同じ画面を描く(映像ではなく状態を送るので中継経由でも軽い) ---- */
+function mvVal(v,lim){const t=typeof v;
+  if(v===null||t==='string'||t==='boolean')return v;
+  if(t==='number')return Math.round(v*100)/100;
+  if(t==='object'){try{const j=JSON.stringify(v);if(j&&j.length<lim)return JSON.parse(j)}catch(e){}}
+  return undefined}
+function mvFlat(src,lim,skip){const o={};for(const k in src){if(skip&&skip[k])continue;const v=mvVal(src[k],lim);if(v!==undefined)o[k]=v}return o}
+const MV_FSKIP={act:1,ai:1,inpBuf:1,tw:1};
+function mvFighter(f){const o=mvFlat(f,600,MV_FSKIP);
+  o.act=f.act?{k:f.act.k,t:f.act.t,used:f.act.used,v:f.act.victim===p1?1:f.act.victim===p2?2:0}:null;return o}
+function mvDiff(prev,cur){if(!prev)return cur;const d={};let n=0;
+  for(const k in cur){const a=prev[k],b=cur[k];if(typeof b==='object'&&b!==null?JSON.stringify(a)!==JSON.stringify(b):a!==b){d[k]=b;n++}}
+  for(const k in prev)if(!(k in cur)){d[k]=null;n++}
+  return n?d:null}
+function mvBuild(R,full){
+  const fs=[p1,p2].concat(mobs),cur={g:mvFlat(g,6000),f:fs.map(mvFighter)},B=R.mvb;
+  const own=q=>q===p1?1:q===p2?2:3+mobs.indexOf(q);
+  const m={t:'v',k:full?1:0,n:fs.length,
+    pj:projs.map(q=>({x:Math.round(q.x),y:Math.round(q.y),vx:Math.round(q.vx*10)/10,t:q.t,bw:q.bw,own:own(q.own)})),
+    sp:sparks.slice(-16).map(k=>({x:Math.round(k.x),y:Math.round(k.y),t:k.t,life:Math.round(k.life),big:k.big?1:0}))};
+  if(full||!B){m.g=cur.g;m.f=cur.f;m.x={tu:towerUnlocked,cl:CHLIST.slice()}}
+  else{m.g=mvDiff(B.g,cur.g);m.f=cur.f.map((o,i)=>mvDiff(B.f[i],o))}
+  R.mvb=cur;return m}
+function rpMirror(now){for(const pl of PL){const R=RP[pl];if(R.st!=='on')continue;
+  const direct=R.dc&&R.dc.readyState==='open',pipe=!direct&&R.relay&&R.relay.kind==='h';
+  const iv=direct?33:(pipe?200:66);                     // 送る間隔: 直接30回/秒・中継15回/秒・HTTPS中継5回/秒
+  if(now-(R.mvT||0)<iv)continue;R.mvT=now;
+  R.mvN=(R.mvN||0)+1;const full=pipe||R.mvKey||R.mvN%60===1;R.mvKey=false;
+  try{rpSend(pl,mvBuild(R,full))}catch(e){}}}
 function rpRelayMsg(pl,m){const R=RP[pl];if(!m)return;R.lastRx=performance.now();
   const direct=R.dc&&R.dc.readyState==='open';
-  if(m.t==='hello'){if(!direct){R.st='on';R.via='relay'}if(R.relay)try{R.relay.send({t:'hi',pl:pl==='p1'?1:2})}catch(e){}kcRender();return}
+  if(m.t==='hello'){R.mvKey=true;if(!direct){R.st='on';R.via='relay'}if(R.relay)try{R.relay.send({t:'hi',pl:pl==='p1'?1:2})}catch(e){}kcRender();return}
   if(!direct&&R.st!=='on'){R.st='on';R.via='relay';kcRender()}
   if(!direct)rpRx(pl,m)}                                // 直接通信がつながっている間は、そちらの入力を使う
 async function rpSigMsg(pl,m){const R=RP[pl];if(!m||!m.k)return;
@@ -788,7 +826,7 @@ async function rpSigMsg(pl,m){const R=RP[pl];if(!m||!m.k)return;
         if(R.ice==='failed'&&R.st!=='on'){R.st='err';R.msg='スマホとの直接通信を確立できませんでした。スマホをPCと同じWi-Fiにつないでから、もう一度お試しください。（'+candText(R.cand)+' / スマホ '+candText(R.rc)+'）'}
         kcRender()};
       const dc=pc.createDataChannel('pad',{ordered:true});R.dc=dc;
-      dc.onopen=()=>{if(R.dc!==dc)return;R.st='on';R.via='direct';R.lastRx=performance.now();rpSend(pl,{t:'hi',pl:pl==='p1'?1:2});kcRender()};
+      dc.onopen=()=>{if(R.dc!==dc)return;R.st='on';R.via='direct';R.mvKey=true;R.lastRx=performance.now();rpSend(pl,{t:'hi',pl:pl==='p1'?1:2});kcRender()};
       dc.onmessage=e=>{let d;try{d=JSON.parse(e.data)}catch(x){return}rpRx(pl,d)};
       dc.onclose=()=>{if(R.dc===dc){R.dc=null;if(R.via==='direct'){R.via='';R.st=R.es||R.relay?'wait':R.st;rpClear(pl)}kcRender()}};
       await pc.setLocalDescription(await pc.createOffer());await waitIce(pc,3500);
@@ -3049,9 +3087,22 @@ function padSend(o){
   else if(PAD.conn&&PAD.conn.open){try{PAD.conn.send(o)}catch(e){}}
   else if(PAD.relay&&PAD.relay.open){try{PAD.relay.send(o)}catch(e){}}}
 function padPause(){padSend({t:'pz'});if(navigator.vibrate)try{navigator.vibrate(15)}catch(e){}}
-function padOnData(d){if(d&&d.t==='bye'){PAD.st='off';PAD.msg='PC CLOSED THE CONNECTION'}}
+function padOnData(d){if(!d)return;if(d.t==='bye'){PAD.st='off';PAD.msg='PC CLOSED THE CONNECTION';return}if(d.t==='v')padView(d)}
+function padPutF(f,o){for(const k in o){if(k==='act')continue;f[k]=o[k]}
+  if('act' in o){const a=o.act;f.act=a?{k:a.k,d:mvDef(f.ch,a.k),t:a.t,used:a.used||[],victim:a.v===1?p1:a.v===2?p2:null}:null}}
+function padView(m){
+  if(!m.k&&!PAD.vOk){padSend({t:'vk'});return}        // 基準(全体)をまだ受け取っていなければ要求する
+  if(m.k)PAD.vOk=true;
+  if(m.g)Object.assign(g,m.g);
+  const n=m.n||2;while(mobs.length<n-2)mobs.push(mk({x:0,face:-1,ch:'ofc1',name:'',sheet:'p'}));if(mobs.length>n-2)mobs.length=n-2;
+  const fs=[p1,p2].concat(mobs);
+  (m.f||[]).forEach((o,i)=>{if(o&&fs[i])padPutF(fs[i],o)});
+  projs=(m.pj||[]).map(q=>Object.assign({},q,{own:q.own===1?p1:q.own===2?p2:(mobs[q.own-3]||p2)}));
+  sparks=(m.sp||[]).map(k=>Object.assign({vx:0,vy:0},k));
+  if(m.x){towerUnlocked=!!m.x.tu;if(Array.isArray(m.x.cl)){CHLIST.length=0;m.x.cl.forEach(c=>CHLIST.push(c))}}
+  PAD.vT=performance.now()}
 function padReset(){
-  for(const k of ['es','dc','pc','conn','relay']){if(PAD[k]){try{PAD[k].close()}catch(e){}}PAD[k]=null}PAD.via='';PAD.rs='';
+  for(const k of ['es','dc','pc','conn','relay']){if(PAD[k]){try{PAD[k].close()}catch(e){}}PAD[k]=null}PAD.via='';PAD.rs='';PAD.vOk=false;
   if(PAD.peer){try{PAD.peer.destroy()}catch(e){}PAD.peer=null}clearTimeout(PAD.tmo)}
 async function padConnect(){
   padReset();PAD.st='conn';PAD.msg='';
@@ -3072,7 +3123,7 @@ async function padConnect(){
       pc.oniceconnectionstatechange=()=>{PAD.ice=pc.iceConnectionState.toUpperCase();
         if(pc.iceConnectionState==='failed'&&PAD.st==='conn'&&!(PAD.relay||PAD.rs==='..')){PAD.st='err';PAD.msg='DIRECT LINK FAILED'}};
       pc.ondatachannel=e=>{const dc=e.channel;PAD.dc=dc;
-        dc.onopen=()=>{PAD.st='on';PAD.via='DIRECT';PAD.last='';clearTimeout(PAD.tmo);padSend({t:'hello',pl:PADQ.pl});try{es.close()}catch(x){}};
+        dc.onopen=()=>{PAD.st='on';PAD.via='DIRECT';PAD.vOk=false;PAD.last='';clearTimeout(PAD.tmo);padSend({t:'hello',pl:PADQ.pl});try{es.close()}catch(x){}};
         dc.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch(x){return}padOnData(d)};
         dc.onclose=()=>{if(PAD.via==='DIRECT'){if(PAD.relay&&PAD.relay.open){PAD.via='RELAY'}else if(PAD.st==='on'){PAD.st='off';PAD.msg=PAD.msg||'CONNECTION LOST'}}}};
       await pc.setRemoteDescription(await netUnpack(m.s));
@@ -3095,12 +3146,16 @@ async function padConnectPeer(){
   peer.on('error',e=>{if(PAD.st==='on')return;PAD.st='err';PAD.msg=(e&&e.type==='peer-unavailable')?'PC NOT FOUND - SHOW THE QR CODE AGAIN':'CONNECTION ERROR ('+String((e&&e.type)||'unknown').toUpperCase()+')'})}
 function padTap(){if(PAD.st==='err'||PAD.st==='off')padConnect()}
 function padTick(now){
+  PAD.show=PAD.st==='on'&&PAD.vOk&&ready&&now-(PAD.vT||0)<2500;   // ゲーム画面を受信できている間は、それを表示
   const b=(held.A?1:0)|(held.B?2:0)|(held.X?4:0),x=pad.x>0.5?1:pad.x<-0.5?-1:0,y=pad.y>0.5?1:pad.y<-0.5?-1:0;
   if((b&~PAD.bits)&&navigator.vibrate)try{navigator.vibrate(10)}catch(e){}   // ボタンを押した瞬間だけ軽く振動
   PAD.bits=b;
   const key=x+','+y+','+b,hb=PAD.via==='RELAY'?600:250;   // 中継経由は定期送信の間隔を広げる
   if(key!==PAD.last||now-PAD.lastT>hb){padSend({t:'s',x:x,y:y,b:b});PAD.last=key;PAD.lastT=now}   // 変化時+定期送信
-  padDraw(x,y,b)}
+  if(PAD.show){try{render();padBadge()}catch(e){PAD.show=false;padDraw(x,y,b)}}else padDraw(x,y,b)}
+function padBadge(){                               // 画面右下に小さく接続状態
+  const t='P'+PADQ.pl+(PAD.via==='RELAY'?' RELAY':'');
+  px(W-6-t.length*6-6,H-15,t.length*6+8,11,'rgba(0,0,0,0.55)');txt(t,W-6,H-13,PAD.via==='RELAY'?'#ffd84a':'#70d89b',1,'right')}
 function padDraw(x,y,b){
   px(0,0,W,H,'#0b0d18');
   for(let i=0;i<H;i+=4)px(0,i,W,1,'rgba(255,255,255,0.025)');
@@ -3126,6 +3181,7 @@ function loop(now){requestAnimationFrame(loop);
   try{pollPads()}catch(e){}                // USBゲームパッドの読み取り
   let dt=now-last;last=now;if(dt>200)dt=200;acc+=dt;let n=0;
   while(acc>=ST&&n<5){step();acc-=ST;n++}
+  try{rpMirror(now)}catch(e){}           // スマホのコントローラーへゲーム画面を送る
   render()}
 requestAnimationFrame(loop);
 </script>
