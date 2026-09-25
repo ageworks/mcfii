@@ -668,6 +668,7 @@ function rpUrl(pl){const u=new URL(location.href);u.search='';u.hash='';u.search
 function rpClear(pl){const D=dirSrc[pl].rp;D.x=0;D.y=0;['A','B','X'].forEach(k=>setBtn(pl,'rp',k,false));applyDir()}
 function rpRx(pl,d){const R=RP[pl];R.lastRx=performance.now();if(!d||typeof d!=='object')return;
   if(d.t==='hello'||d.t==='vk'){R.mvKey=true;return}   // 接続直後・再同期の要求 → 次は全体を送る
+  if(d.t==='va'){if(d.q>(R.mvA||0)){const t0=R.mvTs&&R.mvTs[d.q];if(t0){const r=performance.now()-t0;R.rtt=R.rtt?R.rtt*0.8+r*0.2:r}R.mvA=d.q}return}   // 受け取り確認と往復時間
   if(d.t==='s'){const D=dirSrc[pl].rp,cl=v=>Math.max(-1,Math.min(1,v|0));D.x=cl(d.x);D.y=cl(d.y);
     setBtn(pl,'rp','A',!!(d.b&1));setBtn(pl,'rp','B',!!(d.b&2));setBtn(pl,'rp','X',!!(d.b&4));applyDir()}
   else if(d.t==='pz'){if(!kcIsOpen())togglePause()}}
@@ -708,6 +709,7 @@ function mqttOpen(url,subTopic,onMsg,ms){return new Promise((res,rej)=>{
   ws.binaryType='arraybuffer';
   const api={kind:'m',open:true,onclose:null,
     pub(topic,obj){if(ws.readyState!==1)return;ws.send(mqPkt(0x30,[...mqStr(topic),...new TextEncoder().encode(JSON.stringify(obj))]))},
+    buffered(){return ws.bufferedAmount||0},
     close(){api.open=false;clearInterval(ping);try{ws.close()}catch(e){}}};
   ws.onopen=()=>{ws.send(mqPkt(0x10,[...mqStr('MQTT'),4,2,0,60,...mqStr('mcf2-'+Math.random().toString(36).slice(2,12))]))};
   ws.onerror=()=>fail(new Error('ws'));
@@ -743,11 +745,18 @@ function pipeOpen(base,role,id,onMsg){
         const ss=h.s;api.cur=ss;sseq=0;q=[];api.sendPath=n=>P(ss+'-d-'+n);
         getLoop(n=>P(ss+'-u-'+n),()=>api.cur===ss)}catch(e){await sleep(800)}}})()}
   return api}
-async function relayPick(){                          // 届く中継先を同時に確かめ、リストの先頭側を優先
-  const ps=RELAYS.map(r=>(r.k==='m'?mqttOpen(r.url,'mcf2probe/'+Math.random().toString(36).slice(2),()=>{},4500).then(a=>{a.close();return true}):
-    fetch(r.url+'/version',{cache:'no-store'}).then(x=>x.ok)).catch(()=>false));
-  const res=await Promise.all(ps.map(p=>Promise.race([p,new Promise(z=>setTimeout(()=>z(false),5000))])));
-  return res.indexOf(true)}
+function probeMqtt(url){return new Promise(res=>{     // 自分宛てに1通送り、戻ってくるまでの往復時間を測る
+  const tp='mcf2probe/'+Math.random().toString(36).slice(2);let a=null,t1=0,done=false;
+  const fin=v=>{if(done)return;done=true;try{a&&a.close()}catch(e){}res(v)};
+  setTimeout(()=>fin(-1),4500);
+  mqttOpen(url,tp,()=>fin(performance.now()-t1),4000).then(x=>{a=x;t1=performance.now();x.pub(tp,{p:1})}).catch(()=>fin(-1))})}
+function probeHttp(url){const t0=performance.now();
+  return Promise.race([fetch(url+'/version',{cache:'no-store'}).then(x=>x.ok?performance.now()-t0:-1).catch(()=>-1),new Promise(z=>setTimeout(()=>z(-1),4500))])}
+let RELAY_RTT=[];
+async function relayPick(){                          // 届く中継先の往復時間を同時に測り、一番速いものを選ぶ(WebSocket方式を優先)
+  const res=await Promise.all(RELAYS.map(r=>r.k==='m'?probeMqtt(r.url):probeHttp(r.url)));RELAY_RTT=res;
+  let best=-1,bt=1e12;res.forEach((v,i)=>{if(v<0)return;const w=RELAYS[i].k==='m'?v:v+1e6;if(w<bt){bt=w;best=i}});
+  return best}
 function relayOpen(i,role,id,onMsg){const r=RELAYS[i];if(!r)return Promise.reject(new Error('relay'));
   if(r.k==='m'){const mine=role==='pc'?'u':'d',other=role==='pc'?'d':'u';
     return mqttOpen(r.url,'mcf2pad/'+id+'/'+mine,onMsg,6000).then(a=>{a.send=o=>a.pub('mcf2pad/'+id+'/'+other,o);return a})}
@@ -805,12 +814,21 @@ function mvBuild(R,full){
   if(full||!B){m.g=cur.g;m.f=cur.f;m.x={tu:towerUnlocked,cl:CHLIST.slice()}}
   else{m.g=mvDiff(B.g,cur.g);m.f=cur.f.map((o,i)=>mvDiff(B.f[i],o))}
   R.mvb=cur;return m}
+const MV_WIN=3;                                       // 受け取り確認待ちで送ってよいコマ数
 function rpMirror(now){for(const pl of PL){const R=RP[pl];if(R.st!=='on')continue;
   const direct=R.dc&&R.dc.readyState==='open',pipe=!direct&&R.relay&&R.relay.kind==='h';
-  const iv=direct?33:(pipe?200:66);                     // 送る間隔: 直接30回/秒・中継15回/秒・HTTPS中継5回/秒
-  if(now-(R.mvT||0)<iv)continue;R.mvT=now;
-  R.mvN=(R.mvN||0)+1;const full=pipe||R.mvKey||R.mvN%60===1;R.mvKey=false;
-  try{rpSend(pl,mvBuild(R,full))}catch(e){}}}
+  const iv=direct?33:(pipe?200:40);                     // 送る間隔の下限: 直接30回/秒・中継25回/秒・HTTPS中継5回/秒
+  if(now-(R.mvT||0)<iv)continue;
+  if(!pipe){                                            // (HTTPS中継は常に最新1件だけを送る仕組みなので対象外)
+    const inflight=(R.mvQ||0)-(R.mvA||0);
+    if(inflight>=MV_WIN){if(now-(R.mvT||0)<700)continue;R.mvA=R.mvQ;R.mvKey=true}   // 確認が途絶えたら取り直す
+    const buf=direct?(R.dc.bufferedAmount||0):(R.relay&&R.relay.buffered?R.relay.buffered():0);
+    if(buf>2048)continue}                               // 送信口に溜まっている間は送らない(古いコマは捨てる)
+  R.mvT=now;R.mvQ=(R.mvQ||0)+1;R.mvN=(R.mvN||0)+1;
+  const full=pipe||R.mvKey||R.mvN%90===1;R.mvKey=false;
+  const m=mvBuild(R,full);m.q=R.mvQ;if(R.rtt)m.rt=Math.round(R.rtt);
+  const ts=R.mvTs||(R.mvTs={});ts[R.mvQ]=now;delete ts[R.mvQ-20];
+  try{rpSend(pl,m)}catch(e){}}}
 function rpRelayMsg(pl,m){const R=RP[pl];if(!m)return;R.lastRx=performance.now();
   const direct=R.dc&&R.dc.readyState==='open';
   if(m.t==='hello'){R.mvKey=true;if(!direct){R.st='on';R.via='relay'}if(R.relay)try{R.relay.send({t:'hi',pl:pl==='p1'?1:2})}catch(e){}kcRender();return}
@@ -878,7 +896,7 @@ function rpRender(){
       R.stage==='offer'?'スマホの応答を待っています…（PC '+candText(R.cand)+'）':
       R.stage==='answer'?'直接通信を確立中…（'+(R.ice||'checking')+' / PC '+candText(R.cand)+' / スマホ '+candText(R.rc)+'）':
       'スマホのカメラでQRコードを読み取ってください（'+P+'用'+(R.sig==='x'?'・中継モード':'')+'）'):
-    R.st==='on'?'● スマホを'+P+'のゲームパッドとして接続中（'+(R.via==='relay'?'中継サーバー経由：少し遅延があります':'直接通信')+'）':
+    R.st==='on'?'● スマホを'+P+'のゲームパッドとして接続中（'+(R.via==='relay'?'中継サーバー経由':'直接通信')+(R.rtt?'・往復 約'+Math.round(R.rtt)+'ms':'')+'）':
     R.st==='err'?R.msg:''}
 function kcShow(){
   if(g.phase==='fight'&&!g.paused&&!NET.connected)g.paused=true;       // 戦闘中なら一時停止
@@ -3090,8 +3108,13 @@ function padPause(){padSend({t:'pz'});if(navigator.vibrate)try{navigator.vibrate
 function padOnData(d){if(!d)return;if(d.t==='bye'){PAD.st='off';PAD.msg='PC CLOSED THE CONNECTION';return}if(d.t==='v')padView(d)}
 function padPutF(f,o){for(const k in o){if(k==='act')continue;f[k]=o[k]}
   if('act' in o){const a=o.act;f.act=a?{k:a.k,d:mvDef(f.ch,a.k),t:a.t,used:a.used||[],victim:a.v===1?p1:a.v===2?p2:null}:null}}
+function padNeedKey(){const t=performance.now();if(t-(PAD.vkT||0)>300){PAD.vkT=t;padSend({t:'vk'})}}
 function padView(m){
-  if(!m.k&&!PAD.vOk){padSend({t:'vk'});return}        // 基準(全体)をまだ受け取っていなければ要求する
+  const pipeOnly=!(PAD.dc&&PAD.dc.readyState==='open')&&PAD.relay&&PAD.relay.kind==='h';
+  if(m.q&&!pipeOnly)padSend({t:'va',q:m.q});           // 受け取り確認(送り手が溜め込まないように)
+  if(m.rt)PAD.rtt=m.rt;
+  if(m.q){const gap=PAD.vq&&m.q!==PAD.vq+1;PAD.vq=m.q;if(gap&&!m.k&&!pipeOnly){PAD.vOk=false;padNeedKey();return}}   // 途中が抜けた
+  if(!m.k&&!PAD.vOk){padNeedKey();return}              // 基準(全体)をまだ受け取っていなければ要求する
   if(m.k)PAD.vOk=true;
   if(m.g)Object.assign(g,m.g);
   const n=m.n||2;while(mobs.length<n-2)mobs.push(mk({x:0,face:-1,ch:'ofc1',name:'',sheet:'p'}));if(mobs.length>n-2)mobs.length=n-2;
@@ -3154,7 +3177,7 @@ function padTick(now){
   if(key!==PAD.last||now-PAD.lastT>hb){padSend({t:'s',x:x,y:y,b:b});PAD.last=key;PAD.lastT=now}   // 変化時+定期送信
   if(PAD.show){try{render();padBadge()}catch(e){PAD.show=false;padDraw(x,y,b)}}else padDraw(x,y,b)}
 function padBadge(){                               // 画面右下に小さく接続状態
-  const t='P'+PADQ.pl+(PAD.via==='RELAY'?' RELAY':'');
+  const t='P'+PADQ.pl+(PAD.via==='RELAY'?' RELAY':'')+(PAD.rtt?' '+PAD.rtt+'MS':'');
   px(W-6-t.length*6-6,H-15,t.length*6+8,11,'rgba(0,0,0,0.55)');txt(t,W-6,H-13,PAD.via==='RELAY'?'#ffd84a':'#70d89b',1,'right')}
 function padDraw(x,y,b){
   px(0,0,W,H,'#0b0d18');
