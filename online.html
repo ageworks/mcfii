@@ -498,7 +498,7 @@ addEventListener('pointercancel',e=>{if(e.pointerId===sid)sreset()});
 // PCブラウザ(マウス等の細かいポインタ+ホバー可能)ならPCモード。URLに ?pc=1 / ?pc=0 で強制切替も可能
 // ?pad=<ID>&pl=1|2 で開かれたら、この端末はPC版のゲームパッド(コントローラー専用画面)として動く
 const PADQ=(function(){try{const q=new URLSearchParams(location.search),id=q.get('pad');
-  if(id&&/^mcf2pad-[a-z0-9]{6,20}$/.test(id))return{id:id,pl:q.get('pl')==='2'?2:1}}catch(e){}return null})();
+  if(id&&/^mcf2pad-[a-z0-9]{6,20}$/.test(id))return{id:id,pl:q.get('pl')==='2'?2:1,sig:q.get('sig')==='p'?'p':'n'}}catch(e){}return null})();
 const IS_PC=(function(){
   if(PADQ)return false;
   try{const q=new URLSearchParams(location.search);if(q.get('pc')==='1')return true;if(q.get('pc')==='0')return false}catch(e){}
@@ -654,35 +654,86 @@ function rpLoadLib(){return new Promise((res,rej)=>{
   const next=()=>{if(i>=urls.length)return rej(new Error('peerjs'));const sc=document.createElement('script');sc.src=urls[i++];
     sc.onload=()=>window.Peer?res():next();sc.onerror=next;document.head.appendChild(sc)};next()})}
 function rpNewId(){const c='abcdefghijkmnpqrstuvwxyz23456789';let r='';for(let i=0;i<10;i++)r+=c[Math.random()*c.length|0];return 'mcf2pad-'+r}
-function rpUrl(pl){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('pad',RP[pl].id);u.searchParams.set('pl',pl==='p1'?'1':'2');return u.toString()}
+function rpUrl(pl){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('pad',RP[pl].id);u.searchParams.set('pl',pl==='p1'?'1':'2');
+  u.searchParams.set('sig',RP[pl].sig||'n');return u.toString()}
 function rpClear(pl){const D=dirSrc[pl].rp;D.x=0;D.y=0;['A','B','X'].forEach(k=>setBtn(pl,'rp',k,false));applyDir()}
 function rpRx(pl,d){const R=RP[pl];R.lastRx=performance.now();if(!d||typeof d!=='object')return;
   if(d.t==='s'){const D=dirSrc[pl].rp,cl=v=>Math.max(-1,Math.min(1,v|0));D.x=cl(d.x);D.y=cl(d.y);
     setBtn(pl,'rp','A',!!(d.b&1));setBtn(pl,'rp','B',!!(d.b&2));setBtn(pl,'rp','X',!!(d.b&4));applyDir()}
   else if(d.t==='pz'){if(!kcIsOpen())togglePause()}}
+/* 接続の仲介(シグナリング)は2段構え:
+   ① ntfy.sh(HTTPSの通知サービス)で接続情報を1回ずつ受け渡し → 以降はPCとスマホの直接通信(WebRTC)
+   ② ①に届かない場合だけ PeerJS の中継サーバーを使う */
+const SIG_URL=(window.__NTFY||'https://ntfy.sh');
+const PAD_ICE=[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']},
+  // 携帯回線などP2Pが通りにくい時の中継(TURN)。443番(TCP/TLS)は社内ネットワークでも通りやすい
+  {urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp','turns:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'},
+  {urls:['turn:eu-0.turn.peerjs.com:3478','turn:us-0.turn.peerjs.com:3478'],username:'peerjs',credential:'peerjsp'}];
+// 接続候補の種類を数える(host=同じWi-Fi内 / srflx=インターネット経由の直接 / relay=中継サーバー経由)
+function candInfo(sdp){const c={h:0,s:0,r:0};(sdp||'').split('\n').forEach(l=>{if(l.indexOf('a=candidate')<0)return;
+  if(/ typ relay/.test(l))c.r++;else if(/ typ srflx/.test(l))c.s++;else if(/ typ host/.test(l))c.h++});return c}
+function candText(c){return c?('H'+c.h+' S'+c.s+' R'+c.r):''}
+function sigPub(topic,obj){return fetch(SIG_URL+'/'+topic,{method:'POST',body:JSON.stringify(obj)})}
+function sigSub(topic,onMsg){const es=new EventSource(SIG_URL+'/'+topic+'/sse');
+  es.onmessage=e=>{let d;try{d=JSON.parse(e.data)}catch(x){return}if(d.event&&d.event!=='message')return;
+    let m;try{m=JSON.parse(d.message)}catch(x){return}onMsg(m)};return es}
+function waitIce(pc,ms){return Promise.race([netWaitIce(pc),new Promise(r=>setTimeout(r,ms))])}   // 中継候補の取得を待つ上限
+function rpSend(pl,o){const R=RP[pl];
+  if(R.dc&&R.dc.readyState==='open'){try{R.dc.send(JSON.stringify(o))}catch(e){}}
+  else if(R.conn&&R.conn.open){try{R.conn.send(o)}catch(e){}}}
+function rpClose(R){
+  if(R.es){try{R.es.close()}catch(e){}}if(R.dc){try{R.dc.close()}catch(e){}}if(R.pc){try{R.pc.close()}catch(e){}}
+  if(R.conn){try{R.conn.close()}catch(e){}}if(R.peer){try{R.peer.destroy()}catch(e){}}
+  R.es=null;R.dc=null;R.pc=null;R.conn=null;R.peer=null;clearTimeout(R.tmo)}
 async function rpStart(pl){
   const R=RP[pl];
   if(!/^https?:$/.test(location.protocol)){R.st='err';R.msg='この機能は公開URL（https://〜）でゲームを開いている時だけ使えます。';kcRender();return}
-  if(R.peer&&!R.peer.destroyed){kcRender();return}
-  R.st='loading';R.msg='';kcRender();
-  try{await rpLoadLib()}catch(e){R.st='err';R.msg='通信の準備に失敗しました。インターネット接続を確認してください。';kcRender();return}
+  if(R.es||R.peer){kcRender();return}
+  R.st='loading';R.msg='';R.sig='n';R.stage='';R.id=rpNewId()+rpNewId().slice(8,14);kcRender();
+  let opened=false;
+  const es=sigSub(R.id,m=>rpSigMsg(pl,m));R.es=es;
+  es.onopen=()=>{opened=true;if(R.st==='loading'){R.st='wait';kcRender()}};
+  R.tmo=setTimeout(()=>{if(!opened&&R.es===es){try{es.close()}catch(e){};R.es=null;rpStartPeer(pl)}},6000);   // ①に届かなければ②へ
+  es.onerror=()=>{if(!opened&&es.readyState===2&&R.es===es){clearTimeout(R.tmo);R.es=null;rpStartPeer(pl)}}}
+async function rpSigMsg(pl,m){const R=RP[pl];if(!m||!m.k)return;
+  try{
+    if(m.k==='req'){                                   // スマホから接続要求 → 新しい接続を用意して申し込み(offer)を返す
+      if(m.n===R.n)return;                             // 同じ要求の重複は無視
+      if(R.dc){try{R.dc.close()}catch(e){}}if(R.pc){try{R.pc.close()}catch(e){}}
+      const pc=new RTCPeerConnection({iceServers:PAD_ICE});R.pc=pc;R.n=m.n;R.stage='req';R.ice='';R.cand=null;R.rc=null;kcRender();
+      pc.oniceconnectionstatechange=()=>{if(R.pc!==pc)return;R.ice=pc.iceConnectionState;
+        if(R.ice==='failed'&&R.st!=='on'){R.st='err';R.msg='スマホとの直接通信を確立できませんでした。スマホをPCと同じWi-Fiにつないでから、もう一度お試しください。（'+candText(R.cand)+' / スマホ '+candText(R.rc)+'）'}
+        kcRender()};
+      const dc=pc.createDataChannel('pad',{ordered:true});R.dc=dc;
+      dc.onopen=()=>{if(R.dc!==dc)return;R.st='on';R.lastRx=performance.now();rpSend(pl,{t:'hi',pl:pl==='p1'?1:2});kcRender()};
+      dc.onmessage=e=>{let d;try{d=JSON.parse(e.data)}catch(x){return}rpRx(pl,d)};
+      dc.onclose=()=>{if(R.dc===dc){R.dc=null;if(R.es)R.st='wait';rpClear(pl);kcRender()}};
+      await pc.setLocalDescription(await pc.createOffer());await waitIce(pc,3500);
+      R.cand=candInfo(pc.localDescription.sdp);R.stage='offer';kcRender();
+      await sigPub(R.id,{k:'offer',n:m.n,s:await netPack(pc.localDescription)})}
+    else if(m.k==='answer'&&m.n===R.n&&R.pc&&!R.pc.currentRemoteDescription){
+      const ans=await netUnpack(m.s);R.rc=candInfo(ans&&ans.sdp);R.stage='answer';kcRender();
+      await R.pc.setRemoteDescription(ans)}
+  }catch(e){R.st='err';R.msg='接続エラー（'+(e&&e.message||e)+'）';kcRender()}}
+async function rpStartPeer(pl){                        // 予備: PeerJS
+  const R=RP[pl];R.sig='p';
+  try{await rpLoadLib()}catch(e){R.st='err';R.msg='通信サービスに接続できませんでした。インターネット接続（社内ネットワークの制限など）を確認してください。';kcRender();return}
   const peer=new Peer(rpNewId(),{debug:0});R.peer=peer;R.id=peer.id||null;
   peer.on('open',id=>{R.id=id;if(R.st!=='on')R.st='wait';kcRender()});
   peer.on('connection',conn=>{
-    if(R.conn&&R.conn.open){try{R.conn.close()}catch(e){}}             // 新しく読み取ったスマホを優先
+    if(R.conn&&R.conn.open){try{R.conn.close()}catch(e){}}
     R.conn=conn;
-    conn.on('open',()=>{R.st='on';R.lastRx=performance.now();try{conn.send({t:'hi',pl:pl==='p1'?1:2})}catch(e){};kcRender()});
+    conn.on('open',()=>{R.st='on';R.lastRx=performance.now();rpSend(pl,{t:'hi',pl:pl==='p1'?1:2});kcRender()});
     conn.on('data',d=>rpRx(pl,d));
     conn.on('close',()=>{if(R.conn===conn){R.conn=null;if(R.peer)R.st='wait';rpClear(pl);kcRender()}});
     conn.on('error',()=>{})});
   peer.on('disconnected',()=>{try{if(!peer.destroyed)peer.reconnect()}catch(e){}});
-  peer.on('error',e=>{if(R.st==='on')return;R.st='err';R.msg='接続エラー（'+((e&&e.type)||'unknown')+'）。もう一度お試しください。';kcRender()});
+  peer.on('error',e=>{if(R.st==='on')return;R.st='err';
+    R.msg='通信サービスに接続できませんでした（'+((e&&e.type)||'unknown')+'）。インターネット接続（社内ネットワークの制限など）を確認してください。';kcRender()});
   kcRender()}
-function rpStop(pl){const R=RP[pl];
-  if(R.conn){try{R.conn.send({t:'bye'})}catch(e){};try{R.conn.close()}catch(e){}}
-  if(R.peer){try{R.peer.destroy()}catch(e){}}
-  R.peer=null;R.conn=null;R.id=null;R.st='idle';R.msg='';R.qrFor='';rpClear(pl);kcRender()}
-// 通信が途切れたままボタンが押しっぱなしにならないよう、1.5秒届かなければ入力を離す
+function rpStop(pl){const R=RP[pl];rpSend(pl,{t:'bye'});R.stage='';
+  setTimeout(()=>{rpClose(R)},60);
+  R.id=null;R.st='idle';R.msg='';R.qrFor='';rpClear(pl);kcRender()}
 setInterval(()=>{for(const pl of PL){const R=RP[pl];if(R.st==='on'&&performance.now()-R.lastRx>1500)rpClear(pl)}},500);
 function rpRender(){
   const R=RP[kcPl],btn=$('kcPhoneBtn'),box=$('kcPhoneBox'),qr=$('kcPhoneQr'),msg=$('kcPhoneMsg'),off=$('kcPhoneOff');
@@ -701,7 +752,11 @@ function rpRender(){
       else{qr.style.color='#000';qr.style.fontSize='11px';qr.style.maxWidth='240px';qr.textContent=url}}}
   else{qr.innerHTML='';R.qrFor=''}
   msg.textContent=R.st==='loading'?'準備中…':
-    R.st==='wait'?(R.id?'スマホのカメラでQRコードを読み取ってください（'+P+'用）':'準備中…'):
+    R.st==='wait'?(!R.id?'準備中…':
+      R.stage==='req'?'スマホから接続要求を受信しました。接続情報を準備中…':
+      R.stage==='offer'?'スマホの応答を待っています…（PC '+candText(R.cand)+'）':
+      R.stage==='answer'?'直接通信を確立中…（'+(R.ice||'checking')+' / PC '+candText(R.cand)+' / スマホ '+candText(R.rc)+'）':
+      'スマホのカメラでQRコードを読み取ってください（'+P+'用）'):
     R.st==='on'?'● スマホを'+P+'のゲームパッドとして接続中':
     R.st==='err'?R.msg:''}
 function kcShow(){
@@ -711,7 +766,7 @@ function kcShow(){
 function kcHide(){kcCap=null;document.getElementById('kcModal').classList.remove('show')}
 document.getElementById('bKeycfg').addEventListener('click',e=>{e.stopPropagation();audioUnlock();kcShow()});
 document.getElementById('kcClose').addEventListener('click',kcHide);
-document.getElementById('kcPhoneBtn').addEventListener('click',()=>{const R=RP[kcPl];if(R.st==='err'){R.st='idle';if(R.peer){try{R.peer.destroy()}catch(e){};R.peer=null}}rpStart(kcPl)});
+document.getElementById('kcPhoneBtn').addEventListener('click',()=>{const R=RP[kcPl];if(R.st==='err'){R.st='idle';rpClose(R)}rpStart(kcPl)});
 document.getElementById('kcPhoneOff').addEventListener('click',()=>rpStop(kcPl));
 document.getElementById('kcTab1').addEventListener('click',()=>{kcPl='p1';kcCap=null;kcRender()});
 document.getElementById('kcTab2').addEventListener('click',()=>{kcPl='p2';kcCap=null;kcRender()});
@@ -2905,18 +2960,47 @@ function render(){
 
 let acc=0,last=performance.now();const ST=1000/60;
 /* ---- スマホ(コントローラー専用画面)側 ---- */
-const PAD={peer:null,conn:null,st:'init',msg:'',last:'',lastT:0,bits:0,t0:0};
-function padSend(o){if(PAD.conn&&PAD.conn.open){try{PAD.conn.send(o)}catch(e){}}}
+const PAD={peer:null,conn:null,pc:null,dc:null,es:null,st:'init',msg:'',last:'',lastT:0,bits:0,t0:0};
+function padSend(o){
+  if(PAD.dc&&PAD.dc.readyState==='open'){try{PAD.dc.send(JSON.stringify(o))}catch(e){}}
+  else if(PAD.conn&&PAD.conn.open){try{PAD.conn.send(o)}catch(e){}}}
 function padPause(){padSend({t:'pz'});if(navigator.vibrate)try{navigator.vibrate(15)}catch(e){}}
+function padOnData(d){if(d&&d.t==='bye'){PAD.st='off';PAD.msg='PC CLOSED THE CONNECTION'}}
+function padReset(){
+  for(const k of ['es','dc','pc','conn']){if(PAD[k]){try{PAD[k].close()}catch(e){}}PAD[k]=null}
+  if(PAD.peer){try{PAD.peer.destroy()}catch(e){}PAD.peer=null}clearTimeout(PAD.tmo)}
 async function padConnect(){
-  PAD.st='conn';PAD.msg='';
+  padReset();PAD.st='conn';PAD.msg='';
+  PAD.stage='1/4 CONTACTING PC';PAD.cand=null;PAD.ice='';
+  PAD.tmo=setTimeout(()=>{if(PAD.st==='conn'){PAD.st='err';PAD.msg='TIMEOUT AT STEP '+PAD.stage.slice(0,3)+(PAD.stage[0]==='4'?' - TRY THE SAME WI-FI AS THE PC':' - SHOW THE QR CODE AGAIN');padReset()}},25000);
+  if(PADQ.sig==='p')return padConnectPeer();
+  const n=Math.random().toString(36).slice(2,10);
+  const es=sigSub(PADQ.id,async m=>{
+    if(!m||m.k!=='offer'||m.n!==n||PAD.pc)return;
+    try{
+      const pc=new RTCPeerConnection({iceServers:PAD_ICE});PAD.pc=pc;PAD.stage='2/4 GOT PC INFO';
+      pc.oniceconnectionstatechange=()=>{PAD.ice=pc.iceConnectionState.toUpperCase();
+        if(pc.iceConnectionState==='failed'&&PAD.st==='conn'){PAD.st='err';PAD.msg='DIRECT LINK FAILED - USE THE SAME WI-FI AS THE PC'}};
+      pc.ondatachannel=e=>{const dc=e.channel;PAD.dc=dc;
+        dc.onopen=()=>{PAD.st='on';PAD.last='';clearTimeout(PAD.tmo);padSend({t:'hello',pl:PADQ.pl});try{es.close()}catch(x){}};
+        dc.onmessage=ev=>{let d;try{d=JSON.parse(ev.data)}catch(x){return}padOnData(d)};
+        dc.onclose=()=>{if(PAD.st==='on'){PAD.st='off';PAD.msg=PAD.msg||'CONNECTION LOST'}}};
+      await pc.setRemoteDescription(await netUnpack(m.s));
+      await pc.setLocalDescription(await pc.createAnswer());PAD.stage='3/4 PREPARING';await waitIce(pc,3500);
+      PAD.cand=candInfo(pc.localDescription.sdp);
+      await sigPub(PADQ.id,{k:'answer',n:n,s:await netPack(pc.localDescription)});PAD.stage='4/4 LINKING'
+    }catch(e){PAD.st='err';PAD.msg='CONNECTION ERROR'}});
+  PAD.es=es;
+  let sent=false;
+  es.onopen=()=>{if(sent)return;sent=true;PAD.stage='1/4 WAITING FOR PC';sigPub(PADQ.id,{k:'req',n:n,pl:PADQ.pl}).catch(()=>{PAD.st='err';PAD.msg='NETWORK ERROR (CHECK INTERNET)'})};
+  es.onerror=()=>{if(es.readyState===2&&PAD.st==='conn'){PAD.st='err';PAD.msg='NETWORK ERROR (CHECK INTERNET)'}}}
+async function padConnectPeer(){
   try{await rpLoadLib()}catch(e){PAD.st='err';PAD.msg='NETWORK ERROR (CHECK INTERNET)';return}
-  if(PAD.peer){try{PAD.peer.destroy()}catch(e){}}
   const peer=new Peer({debug:0});PAD.peer=peer;
   peer.on('open',()=>{const c=peer.connect(PADQ.id,{serialization:'json',reliable:true});PAD.conn=c;
-    c.on('open',()=>{PAD.st='on';PAD.last='';c.send({t:'hello',pl:PADQ.pl})});
-    c.on('data',d=>{if(d&&d.t==='bye'){PAD.st='off';PAD.msg='PC CLOSED THE CONNECTION'}});
-    c.on('close',()=>{if(PAD.st==='on'){PAD.st='off';PAD.msg='CONNECTION LOST'}});
+    c.on('open',()=>{PAD.st='on';PAD.last='';clearTimeout(PAD.tmo);c.send({t:'hello',pl:PADQ.pl})});
+    c.on('data',padOnData);
+    c.on('close',()=>{if(PAD.st==='on'){PAD.st='off';PAD.msg=PAD.msg||'CONNECTION LOST'}});
     c.on('error',()=>{})});
   peer.on('error',e=>{if(PAD.st==='on')return;PAD.st='err';PAD.msg=(e&&e.type==='peer-unavailable')?'PC NOT FOUND - SHOW THE QR CODE AGAIN':'CONNECTION ERROR ('+String((e&&e.type)||'unknown').toUpperCase()+')'})}
 function padTap(){if(PAD.st==='err'||PAD.st==='off')padConnect()}
@@ -2935,8 +3019,9 @@ function padDraw(x,y,b){
   const st=PAD.st,col=st==='on'?'#70d89b':(st==='err'||st==='off')?'#ff8a8a':'#9ad8ff';
   const tt=st==='on'?'CONNECTED':st==='conn'||st==='init'?'CONNECTING'+'...'.slice(0,((Date.now()/300)|0)%4):'DISCONNECTED';
   txs(tt,200,98,col,2,'center');
-  if(PAD.msg)txt(PAD.msg,200,124,'#c9cfdd',1,'center');
-  if(st==='err'||st==='off')txt('TAP  HERE  TO  RECONNECT',200,140,'#ffffff',1,'center');
+  if(PAD.msg)txt(PAD.msg,200,138,'#c9cfdd',1,'center');
+  if(st!=='on'&&PAD.stage)txt(PAD.stage+(PAD.ice?'  ICE:'+PAD.ice:'')+(PAD.cand?'  '+candText(PAD.cand):'')+(PADQ.sig==='p'?'  (P)':''),200,124,'#9aa3c0',1,'center');
+  if(st==='err'||st==='off')txt('TAP  HERE  TO  RECONNECT',200,154,'#ffffff',1,'center');
   // いまの入力を表示(方向と A/B/X)
   const cx=120,cy=210;px(cx-44,cy-44,88,88,'#1a1f33');
   [[0,-1],[0,1],[-1,0],[1,0]].forEach(([dx,dy])=>{const on=(dx&&dx===x)||(dy&&dy===y);px(cx+dx*28-12,cy+dy*28-12,24,24,on?'#f0c020':'#343b52')});
